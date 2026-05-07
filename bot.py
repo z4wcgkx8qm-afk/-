@@ -20,6 +20,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 
 raw_username = os.getenv("BOT_USERNAME")
 if not raw_username:
@@ -84,7 +85,10 @@ async def ensure_user(user_id: int):
 
 
 async def get_user(user_id: int):
-    return await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+    return await db.fetchrow(
+        "SELECT * FROM users WHERE user_id = $1",
+        user_id
+    )
 
 
 # ================= SETTINGS =================
@@ -161,6 +165,28 @@ def admin_kb(settings):
     ])
 
 
+def cancel_kb(req_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Отменить заявку",
+                callback_data=f"cancel_{req_id}"
+            )
+        ]
+    ])
+
+
+def to_channel_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Перейти в канал",
+                url=CHANNEL_LINK
+            )
+        ]
+    ])
+
+
 # ================= START =================
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -201,9 +227,7 @@ async def start(message: Message):
             f"Принята заявка под номером <code>#{req_id}</code>\n\n"
             f"• Пользователь: @{message.from_user.username or 'user'}\n"
             f"• Формат: <code>CODE</code>",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Отменить заявку", callback_data=f"cancel_{req_id}")]
-            ])
+            reply_markup=cancel_kb(req_id)
         )
 
         await message.answer("➕ Вы приняли заявку")
@@ -271,12 +295,7 @@ async def cancel_request(callback: CallbackQuery):
         f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
         f"Заявка <code>#{req_id}</code>\n"
         f"Отменена администратором, дождитесь новой",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="Перейти в канал",
-                url=f"https://t.me/c/{str(CHANNEL_ID).replace('-100', '')}"
-            )]
-        ])
+        reply_markup=to_channel_kb()
     )
 
     await callback.message.delete()

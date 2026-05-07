@@ -84,24 +84,6 @@ async def get_settings():
     return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
 
 
-# ================= PROFILE =================
-async def profile_text(user_id: int):
-    user = await db.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
-    settings = await get_settings()
-
-    user = dict(user or {})
-    user.setdefault("balance", 0)
-    user.setdefault("today_earn", 0)
-
-    return (
-        "<b>👤 Профиль</b>\n\n"
-        f"ID: <code>{user_id}</code>\n"
-        f"Баланс: <code>{float(user['balance']):.2f}</code>\n"
-        f"Сегодня: <code>{float(user['today_earn']):.2f}</code>\n"
-        f"Статус: {settings['status']}"
-    )
-
-
 # ================= KEYBOARDS =================
 def request_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -166,7 +148,7 @@ async def handle_text(message: Message):
         await create_request(message, "CODE")
 
 
-# ================= TAKE =================
+# ================= START (FIXED) =================
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -174,6 +156,7 @@ async def start(message: Message):
 
     args = message.text.split()
 
+    # ===== DIPLINK TAKE =====
     if len(args) > 1 and args[1].startswith("take_"):
 
         req_id = int(args[1].split("_")[1])
@@ -187,18 +170,32 @@ async def start(message: Message):
             UPDATE requests SET status='taken', taken_by=$2 WHERE id=$1
         """, req_id, message.from_user.id)
 
-        # группа
+        # QR включаем ТОЛЬКО для QR заявок
+        if req["format"] == "QR":
+            await db.execute("""
+                UPDATE requests SET qr_state=TRUE WHERE id=$1
+            """, req_id)
+
         await bot.send_message(
             GROUP_ID,
             f"🕓 Принята заявка #{req_id}\n• Формат: {req['format']}",
             reply_markup=service_kb(req_id)
         )
 
-        # юзер
         await bot.send_message(
             message.from_user.id,
             f"🕓 Принята заявка #{req_id}\nОжидайте QR"
         )
+
+        return
+
+    # ===== NORMAL START =====
+    await message.answer(
+        "🤖 Бот активен\n\n"
+        "Команды:\n"
+        "• куар\n"
+        "• код"
+    )
 
 
 # ================= ACCEPT =================
@@ -264,12 +261,11 @@ async def slip(call: CallbackQuery):
 # ================= CANCEL =================
 @dp.callback_query(F.data.startswith("cancel_"))
 async def cancel(call: CallbackQuery):
-
     await call.message.delete()
     await call.answer()
 
 
-# ================= QR FROM GROUP =================
+# ================= QR HANDLER =================
 @dp.message(F.photo)
 async def qr_handler(message: Message):
 

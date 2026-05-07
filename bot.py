@@ -28,11 +28,14 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 db: asyncpg.Pool = None
 
+
 # ================= DB =================
 async def init_db():
     global db
+
     db = await asyncpg.create_pool(DATABASE_URL)
 
+    # USERS
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -41,6 +44,7 @@ async def init_db():
     );
     """)
 
+    # SETTINGS
     await db.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         id INT PRIMARY KEY,
@@ -48,19 +52,31 @@ async def init_db():
         status TEXT DEFAULT 'Стартворк'
     );
 
-    INSERT INTO settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+    INSERT INTO settings (id)
+    VALUES (1)
+    ON CONFLICT DO NOTHING;
     """)
 
+    # REQUESTS BASE TABLE
     await db.execute("""
     CREATE TABLE IF NOT EXISTS requests (
         id SERIAL PRIMARY KEY,
         channel_msg_id BIGINT,
         status TEXT DEFAULT 'open',
         taken_by BIGINT,
-        format TEXT,
-        qr_state BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
     );
+    """)
+
+    # ================= AUTO MIGRATIONS =================
+    await db.execute("""
+    ALTER TABLE requests
+    ADD COLUMN IF NOT EXISTS format TEXT;
+    """)
+
+    await db.execute("""
+    ALTER TABLE requests
+    ADD COLUMN IF NOT EXISTS qr_state BOOLEAN DEFAULT FALSE;
     """)
 
 
@@ -103,19 +119,28 @@ async def profile_text(user_id: int):
 # ================= KEYBOARDS =================
 def request_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Сдать номер", url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}")]
+        [InlineKeyboardButton(
+            text="Сдать номер",
+            url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
+        )]
     ])
 
 
 def cancel_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Отменить заявку", callback_data=f"cancel_{req_id}")]
+        [InlineKeyboardButton(
+            text="Отменить заявку",
+            callback_data=f"cancel_{req_id}"
+        )]
     ])
 
 
 def to_channel_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Перейти в канал", url=CHANNEL_LINK)]
+        [InlineKeyboardButton(
+            text="Перейти в канал",
+            url=CHANNEL_LINK
+        )]
     ])
 
 
@@ -155,7 +180,7 @@ async def create_request(message: Message, fmt: str):
     await message.answer("Заявка создана")
 
 
-# ================= TAKE REQUEST =================
+# ================= START =================
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -200,19 +225,12 @@ async def start(message: Message):
             reply_markup=cancel_kb(req_id)
         )
 
-        # QR FLOW
-        if req["format"] == "QR":
-            await bot.send_message(
-                ADMIN_ID,
-                f"Заявка QR #{req_id}\n• Прикрепите QR"
-            )
-
-            await db.execute("""
-                UPDATE requests SET qr_state = TRUE WHERE id = $1
-            """, req_id)
-
         await message.answer("Принято")
         return
+
+    await message.answer(
+        await profile_text(message.from_user.id)
+    )
 
 
 # ================= CANCEL =================
@@ -228,46 +246,21 @@ async def cancel(callback: CallbackQuery):
         return
 
     await db.execute("""
-        UPDATE requests SET status = 'cancelled' WHERE id = $1
+        UPDATE requests
+        SET status = 'cancelled'
+        WHERE id = $1
     """, req_id)
 
     if req["taken_by"]:
         await bot.send_message(
             req["taken_by"],
             f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
-            f"Заявка #{req_id} отменена администратором",
+            f"Заявка #{req_id} отменена",
             reply_markup=to_channel_kb()
         )
 
     await callback.message.delete()
-    await callback.answer("Отменено")
-
-
-# ================= QR IMAGE HANDLER =================
-@dp.message(F.photo)
-async def handle_qr(message: Message):
-
-    req = await db.fetchrow("""
-        SELECT * FROM requests
-        WHERE qr_state = TRUE AND status = 'taken'
-        ORDER BY id DESC LIMIT 1
-    """)
-
-    if not req:
-        return
-
-    await db.execute("""
-        UPDATE requests SET qr_state = FALSE WHERE id = $1
-    """, req["id"])
-
-    await bot.send_photo(
-        req["taken_by"],
-        message.photo[-1].file_id,
-        caption="⏱ Время на сканирование: 2 минуты",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Отменить", callback_data=f"cancel_{req['id']}")]
-        ])
-    )
+    await callback.answer("Ок")
 
 
 # ================= MAIN =================

@@ -1,7 +1,6 @@
 import os
 import asyncio
 import asyncpg
-import pytz
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -13,16 +12,15 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK")
+BOT_USERNAME = os.getenv("BOT_USERNAME").replace("@", "")
 
 bot = Bot(
     token=TOKEN,
@@ -119,10 +117,10 @@ async def profile_text(user_id: int):
 
     return (
         "<b>👤 Ваш профиль:</b>\n\n"
-        f"🔓 ID Аккаунта: <code>{user_id}</code>\n"
+        f"🔓 ID: <code>{user_id}</code>\n"
         f"📊 Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
         f"💼 Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
-        f"🕓 Статус бота: <code>{settings['status']}</code>"
+        f"🕓 Статус: <code>{settings['status']}</code>"
     )
 
 
@@ -142,7 +140,7 @@ def request_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="Сдать номер",
-            callback_data=f"take_{req_id}"
+            url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
         )]
     ])
 
@@ -161,6 +159,47 @@ async def start(message: Message):
 
     await ensure_user(message.from_user.id)
 
+    args = message.text.split()
+
+    # ===== ЗАЯВКА =====
+    if len(args) > 1 and args[1].startswith("take_"):
+
+        req_id = int(args[1].split("_")[1])
+
+        req = await db.fetchrow("""
+            SELECT * FROM requests WHERE id = $1
+        """, req_id)
+
+        if not req:
+            await message.answer("❌ Заявка не найдена")
+            return
+
+        if req["status"] != "open":
+            await message.answer("❌ Уже занято")
+            return
+
+        updated = await db.execute("""
+            UPDATE requests
+            SET status = 'taken',
+                taken_by = $2
+            WHERE id = $1 AND status = 'open'
+        """, req_id, message.from_user.id)
+
+        if updated == "UPDATE 0":
+            await message.answer("❌ Уже забрали")
+            return
+
+        await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
+
+        await bot.send_message(
+            GROUP_ID,
+            f"✅ Заявка принята от: @{message.from_user.username or 'user'}"
+        )
+
+        await message.answer("➕ Вы приняли заявку")
+        return
+
+    # ===== ПРОФИЛЬ =====
     await message.answer(
         await profile_text(message.from_user.id),
         reply_markup=profile_kb(message.from_user.id)
@@ -174,60 +213,26 @@ async def add_request(message: Message):
     if message.chat.id != GROUP_ID:
         return
 
+    req = await db.fetchrow("""
+        INSERT INTO requests (channel_msg_id)
+        VALUES (0)
+        RETURNING id
+    """)
+
     sent = await bot.send_message(
         CHANNEL_ID,
         "<b>💼 Срочно нужен номер!</b>\n"
-        "Кто первый нажмёт, того и заявка"
-    )
-
-    req = await db.fetchrow("""
-        INSERT INTO requests (channel_msg_id)
-        VALUES ($1)
-        RETURNING id
-    """, sent.message_id)
-
-    await bot.edit_message_reply_markup(
-        CHANNEL_ID,
-        sent.message_id,
+        "Кто первый нажмёт, того и заявка",
         reply_markup=request_kb(req["id"])
     )
 
-    await message.answer("Заявка создана")
-
-
-# ================= TAKE REQUEST =================
-@dp.callback_query(F.data.startswith("take_"))
-async def take_request(callback: CallbackQuery):
-
-    req_id = int(callback.data.split("_")[1])
-
-    req = await db.fetchrow("""
-        SELECT * FROM requests WHERE id = $1
-    """, req_id)
-
-    if not req:
-        await callback.answer("Заявка не найдена", show_alert=True)
-        return
-
-    updated = await db.execute("""
+    await db.execute("""
         UPDATE requests
-        SET status = 'taken',
-            taken_by = $2
-        WHERE id = $1 AND status = 'open'
-    """, req_id, callback.from_user.id)
+        SET channel_msg_id = $1
+        WHERE id = $2
+    """, sent.message_id, req["id"])
 
-    if updated == "UPDATE 0":
-        await callback.answer("Уже занято", show_alert=True)
-        return
-
-    await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
-
-    await bot.send_message(
-        GROUP_ID,
-        f"✅ Заявка принята от: @{callback.from_user.username}"
-    )
-
-    await callback.answer("Принято")
+    await message.answer("Заявка создана")
 
 
 # ================= ADMIN =================

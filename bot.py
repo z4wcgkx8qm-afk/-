@@ -32,7 +32,6 @@ async def is_subscribed(user_id: int):
         chat_id=CHANNEL_ID,
         user_id=user_id
     )
-
     return member.status in ["member", "administrator", "creator"]
 
 
@@ -65,7 +64,6 @@ async def start(message: Message):
             "Для того,чтобы пользоваться ботом,необходимо подписаться на информационный ресурс проекта",
             reply_markup=sub_keyboard()
         )
-
         return
 
     await message.answer("запущено")
@@ -76,10 +74,10 @@ async def check_sub(callback: CallbackQuery):
 
     if await is_subscribed(callback.from_user.id):
 
-        await callback.message.edit_text("запущено")
+        await callback.message.delete()
+        await callback.message.answer("запущено")
 
     else:
-
         await callback.answer(
             "Вы не подписаны",
             show_alert=True

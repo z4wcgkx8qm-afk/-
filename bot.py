@@ -1,6 +1,6 @@
 import os
 import asyncio
-import sqlite3
+import datetime
 
 from aiogram import Bot, Dispatcher, types
 from groq import Groq
@@ -15,72 +15,43 @@ dp = Dispatcher()
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- DB (SQLite) ---
-conn = sqlite3.connect("memory.db")
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS memory (
-    user_id INTEGER,
-    role TEXT,
-    content TEXT
-)
-""")
-conn.commit()
+# --- YEAR ---
+year = datetime.datetime.now().year
 
 
-# --- DB FUNCS ---
-def save_message(user_id, role, content):
-    cur.execute(
-        "INSERT INTO memory VALUES (?, ?, ?)",
-        (user_id, role, content)
-    )
-    conn.commit()
+# --- SYSTEM PROMPT ---
+SYSTEM = f"""
+Ты — Мыслитель, простой дружелюбный помощник в Telegram.
+Пиши ТОЛЬКО на грамотном русском языке без ошибок.
+Не используй сложные слова.
+Отвечай просто и понятно.
+
+Текущий год: {year}.
+Если тебя спрашивают про год — всегда отвечай этим значением.
+Ты никогда не говоришь, что не знаешь текущий год.
+"""
 
 
-def get_history(user_id):
-    cur.execute(
-        "SELECT role, content FROM memory WHERE user_id=? ORDER BY rowid DESC LIMIT 10",
-        (user_id,)
-    )
-    rows = cur.fetchall()
-
-    # разворачиваем в правильный порядок
-    rows.reverse()
-
-    return [{"role": r, "content": c} for r, c in rows]
-
-
-# --- AI ---
-def ask_ai(user_id, text):
-    save_message(user_id, "user", text)
-
-    history = get_history(user_id)
-
-    messages = [
-        {
-            "role": "system",
-            "content": "Ты Мыслитель. Отвечай кратко, умно, иногда саркастично. Без воды."
-        }
-    ] + history
-
+# --- AI FUNCTION ---
+def ask_ai(text: str):
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages=messages
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": text}
+        ]
     )
-
-    answer = response.choices[0].message.content
-
-    save_message(user_id, "assistant", answer)
-
-    return answer
+    return response.choices[0].message.content
 
 
 # --- HANDLER ---
 @dp.message()
 async def handler(message: types.Message):
-    answer = ask_ai(message.from_user.id, message.text)
-    await message.answer(answer)
+    try:
+        answer = ask_ai(message.text)
+        await message.answer(answer)
+    except Exception as e:
+        await message.answer("Ошибка. Попробуй ещё раз.")
 
 
 # --- START ---

@@ -15,11 +15,11 @@ client = Groq(api_key=GROQ_API_KEY)
 
 def ask_ai(text: str):
     response = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="llama3-70b-8192",
         messages=[
             {
                 "role": "system",
-                "content": "Ты Мыслитель. Отвечай кратко, умно и по делу."
+                "content": "Ты Мыслитель. Отвечай кратко, умно и по делу. Без воды."
             },
             {
                 "role": "user",
@@ -32,8 +32,11 @@ def ask_ai(text: str):
 
 @dp.message()
 async def handler(message: types.Message):
-    answer = ask_ai(message.text)
-    await message.answer(answer)
+    try:
+        answer = ask_ai(message.text)
+        await message.answer(answer)
+    except Exception as e:
+        await message.answer("ошибка запроса к ИИ")
 
 
 async def main():

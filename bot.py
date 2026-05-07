@@ -21,6 +21,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+GROUP_ID = int(os.getenv("GROUP_ID"))
 CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -32,6 +33,10 @@ bot = Bot(
 
 dp = Dispatcher()
 db: asyncpg.Pool = None
+
+
+# ================= ACTIVE REQUEST =================
+active_request = None
 
 
 # ================= DB =================
@@ -150,6 +155,12 @@ def profile_keyboard(user_id: int):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
+def request_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Сдать номер", callback_data="take_request")]
+    ])
+
+
 def admin_keyboard(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
@@ -209,6 +220,51 @@ async def check_sub(callback: CallbackQuery):
         )
     else:
         await callback.answer("Вы не подписаны", show_alert=True)
+
+
+# ================= ADD REQUEST =================
+@dp.message(Command("add"))
+async def add_request(message: Message):
+
+    global active_request
+
+    if message.chat.id != GROUP_ID:
+        return
+
+    sent = await bot.send_message(
+        CHANNEL_ID,
+        "<b>💼 Срочно нужен номер!</b>\n"
+        "Кто первый нажмёт, того и заявка",
+        reply_markup=request_keyboard()
+    )
+
+    active_request = {
+        "channel_msg_id": sent.message_id
+    }
+
+    await message.answer("Заявка создана")
+
+
+# ================= TAKE REQUEST =================
+@dp.callback_query(F.data == "take_request")
+async def take_request(callback: CallbackQuery):
+
+    global active_request
+
+    if not active_request:
+        await callback.answer("Заявка уже закрыта", show_alert=True)
+        return
+
+    await bot.delete_message(CHANNEL_ID, active_request["channel_msg_id"])
+
+    await bot.send_message(
+        GROUP_ID,
+        f"✅ Заявка принята от: @{callback.from_user.username}"
+    )
+
+    active_request = None
+
+    await callback.answer("Принято")
 
 
 # ================= ADMIN =================

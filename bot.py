@@ -40,7 +40,6 @@ async def init_db():
 
     db = await asyncpg.create_pool(DATABASE_URL)
 
-    # users table
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -48,13 +47,12 @@ async def init_db():
     );
     """)
 
-    # 🔥 авто-миграция (ВАЖНО)
+    # 🔥 авто-миграция (чтобы не было KeyError)
     await db.execute("""
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS today_earn NUMERIC DEFAULT 0;
     """)
 
-    # settings
     await db.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         id INT PRIMARY KEY,
@@ -113,24 +111,22 @@ async def is_subscribed(user_id: int):
     return member.status in ["member", "administrator", "creator"]
 
 
-# ================= PROFILE =================
+# ================= PROFILE (ТВОЙ ДИЗАЙН НЕ ТРОГАЛ) =================
 async def profile_text(user_id: int):
 
     settings = await get_settings()
     user = await get_user(user_id)
 
-    # 🔥 защита от старых записей
     user = dict(user)
     user.setdefault("balance", 0)
     user.setdefault("today_earn", 0)
 
     return (
-        "<b>👤 Ваш профиль</b>\n\n"
-        f"🔓 ID: <code>{user_id}</code>\n"
-        f"📊 Заработано за сегодня: <code>{user['today_earn']}</code> USDT\n"
-        f"💼 Баланс: <code>{user['balance']}</code> USDT\n"
-        f"🕓 Статус: {settings['status']}\n"
-        f"💰 Ставка: <code>{settings['rate']}</code> USDT"
+        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль: /n\n\n"
+        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: {user_id}\n"
+        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{user['today_earn']} USDT</code>\n"
+        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{user['balance']} USDT</code>\n"
+        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
     )
 
 
@@ -149,7 +145,7 @@ def profile_keyboard(user_id: int):
 
     if user_id == ADMIN_ID:
         kb.append([
-            InlineKeyboardButton(text="Админ панель", callback_data="admin")
+            InlineKeyboardButton(text="Перейти в настройки", callback_data="admin")
         ])
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -158,7 +154,7 @@ def profile_keyboard(user_id: int):
 def admin_keyboard(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
-        [InlineKeyboardButton(text=f"Ставка: {settings['rate']}", callback_data="change_rate")],
+        [InlineKeyboardButton(text=f"Ставка за номер: {settings['rate']}", callback_data="change_rate")],
         [InlineKeyboardButton(text="Назад", callback_data="back")]
     ])
 
@@ -188,7 +184,8 @@ async def start(message: Message):
 
     if not await is_subscribed(message.from_user.id):
         await message.answer(
-            "🚫 Доступ запрещен!\n\nПодпишитесь на канал",
+            "<tg-emoji emoji-id='5278578973595427038'>🚫</tg-emoji> Доступ запрещен!\n\n"
+            "Для того,чтобы пользоваться ботом,необходимо подписаться на информационный ресурс проекта",
             reply_markup=sub_keyboard()
         )
         return
@@ -225,7 +222,7 @@ async def admin(callback: CallbackQuery):
     settings = await get_settings()
 
     await callback.message.edit_text(
-        "🔨 Админ панель",
+        "<tg-emoji emoji-id='5276314275994954605'>🔨</tg-emoji> Вы перешли в панель администратора,выберите следующее действие:",
         reply_markup=admin_keyboard(settings)
     )
 

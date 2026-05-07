@@ -40,14 +40,21 @@ async def init_db():
 
     db = await asyncpg.create_pool(DATABASE_URL)
 
+    # users table
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
-        balance NUMERIC DEFAULT 0,
-        today_earn NUMERIC DEFAULT 0
+        balance NUMERIC DEFAULT 0
     );
     """)
 
+    # 🔥 авто-миграция (ВАЖНО)
+    await db.execute("""
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS today_earn NUMERIC DEFAULT 0;
+    """)
+
+    # settings
     await db.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         id INT PRIMARY KEY,
@@ -61,7 +68,7 @@ async def init_db():
     """)
 
 
-# ================= DB HELPERS =================
+# ================= USERS =================
 async def ensure_user(user_id: int):
     await db.execute("""
         INSERT INTO users (user_id)
@@ -76,10 +83,9 @@ async def get_user(user_id: int):
     """, user_id)
 
 
+# ================= SETTINGS =================
 async def get_settings():
-    return await db.fetchrow("""
-        SELECT * FROM settings WHERE id = 1
-    """)
+    return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
 
 
 async def toggle_status():
@@ -112,6 +118,11 @@ async def profile_text(user_id: int):
 
     settings = await get_settings()
     user = await get_user(user_id)
+
+    # 🔥 защита от старых записей
+    user = dict(user)
+    user.setdefault("balance", 0)
+    user.setdefault("today_earn", 0)
 
     return (
         "<b>👤 Ваш профиль</b>\n\n"
@@ -169,7 +180,7 @@ def start_scheduler():
     scheduler.start()
 
 
-# ================= HANDLERS =================
+# ================= START =================
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -188,6 +199,7 @@ async def start(message: Message):
     )
 
 
+# ================= CHECK SUB =================
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(callback: CallbackQuery):
 

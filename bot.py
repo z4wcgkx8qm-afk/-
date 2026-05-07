@@ -47,7 +47,6 @@ async def init_db():
     );
     """)
 
-    # 🔥 авто-миграция (чтобы не было KeyError)
     await db.execute("""
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS today_earn NUMERIC DEFAULT 0;
@@ -111,7 +110,7 @@ async def is_subscribed(user_id: int):
     return member.status in ["member", "administrator", "creator"]
 
 
-# ================= PROFILE (ТВОЙ ДИЗАЙН НЕ ТРОГАЛ) =================
+# ================= PROFILE =================
 async def profile_text(user_id: int):
 
     settings = await get_settings()
@@ -122,7 +121,7 @@ async def profile_text(user_id: int):
     user.setdefault("today_earn", 0)
 
     return (
-        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль: /n\n\n"
+        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
         f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: {user_id}\n"
         f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{user['today_earn']} USDT</code>\n"
         f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{user['balance']} USDT</code>\n"
@@ -234,7 +233,6 @@ async def toggle(callback: CallbackQuery):
         return
 
     await toggle_status()
-
     settings = await get_settings()
 
     await callback.message.edit_reply_markup(
@@ -257,7 +255,6 @@ async def change_rate(callback: CallbackQuery):
     new_rate = options[(idx + 1) % len(options)]
 
     await set_rate(new_rate)
-
     settings = await get_settings()
 
     await callback.message.edit_reply_markup(

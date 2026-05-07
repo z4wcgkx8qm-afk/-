@@ -1,7 +1,7 @@
 import os
 import asyncio
-
 import asyncpg
+import pytz
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -14,11 +14,16 @@ from aiogram.types import (
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+
+# ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 bot = Bot(
     token=TOKEN,
@@ -29,7 +34,7 @@ dp = Dispatcher()
 db: asyncpg.Pool = None
 
 
-# ================= DB INIT =================
+# ================= DB =================
 async def init_db():
     global db
 
@@ -38,7 +43,8 @@ async def init_db():
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
-        balance NUMERIC DEFAULT 0
+        balance NUMERIC DEFAULT 0,
+        today_earn NUMERIC DEFAULT 0
     );
     """)
 
@@ -51,13 +57,29 @@ async def init_db():
 
     INSERT INTO settings (id)
     VALUES (1)
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT DO NOTHING;
     """)
 
 
-# ================= SETTINGS =================
+# ================= DB HELPERS =================
+async def ensure_user(user_id: int):
+    await db.execute("""
+        INSERT INTO users (user_id)
+        VALUES ($1)
+        ON CONFLICT DO NOTHING;
+    """, user_id)
+
+
+async def get_user(user_id: int):
+    return await db.fetchrow("""
+        SELECT * FROM users WHERE user_id = $1
+    """, user_id)
+
+
 async def get_settings():
-    return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
+    return await db.fetchrow("""
+        SELECT * FROM settings WHERE id = 1
+    """)
 
 
 async def toggle_status():
@@ -79,19 +101,26 @@ async def set_rate(rate: float):
     """, rate)
 
 
-# ================= USERS =================
-async def ensure_user(user_id: int):
-    await db.execute("""
-        INSERT INTO users (user_id)
-        VALUES ($1)
-        ON CONFLICT DO NOTHING;
-    """, user_id)
-
-
 # ================= SUB CHECK =================
 async def is_subscribed(user_id: int):
     member = await bot.get_chat_member(CHANNEL_ID, user_id)
     return member.status in ["member", "administrator", "creator"]
+
+
+# ================= PROFILE =================
+async def profile_text(user_id: int):
+
+    settings = await get_settings()
+    user = await get_user(user_id)
+
+    return (
+        "<b>👤 Ваш профиль</b>\n\n"
+        f"🔓 ID: <code>{user_id}</code>\n"
+        f"📊 Заработано за сегодня: <code>{user['today_earn']}</code> USDT\n"
+        f"💼 Баланс: <code>{user['balance']}</code> USDT\n"
+        f"🕓 Статус: {settings['status']}\n"
+        f"💰 Ставка: <code>{settings['rate']}</code> USDT"
+    )
 
 
 # ================= KEYBOARDS =================
@@ -103,55 +132,44 @@ def sub_keyboard():
 
 
 def profile_keyboard(user_id: int):
-    buttons = [
+    kb = [
         [InlineKeyboardButton(text="Вывести", callback_data="withdraw")]
     ]
 
     if user_id == ADMIN_ID:
-        buttons.append([
-            InlineKeyboardButton(text="Перейти в настройки", callback_data="admin_panel")
+        kb.append([
+            InlineKeyboardButton(text="Админ панель", callback_data="admin")
         ])
 
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 def admin_keyboard(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=f"Статус: {settings['status']}",
-                callback_data="toggle_status"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"Ставка: {settings['rate']}",
-                callback_data="change_rate"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="Назад",
-                callback_data="back_profile"
-            )
-        ]
+        [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
+        [InlineKeyboardButton(text=f"Ставка: {settings['rate']}", callback_data="change_rate")],
+        [InlineKeyboardButton(text="Назад", callback_data="back")]
     ])
 
 
-# ================= PROFILE =================
-async def profile_text(user_id: int):
-    settings = await get_settings()
-
-    return (
-        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
-        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
-        "<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>0.00 USDT</code>\n"
-        "<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>0.00 USDT</code>\n"
-        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
-    )
+# ================= RESET DAILY =================
+async def reset_daily():
+    await db.execute("""
+        UPDATE users
+        SET today_earn = 0
+    """)
+    print("Daily reset done")
 
 
-# ================= START =================
+scheduler = AsyncIOScheduler(timezone=pytz.timezone("Europe/Moscow"))
+
+
+def start_scheduler():
+    scheduler.add_job(reset_daily, "cron", hour=6, minute=0)
+    scheduler.start()
+
+
+# ================= HANDLERS =================
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -159,8 +177,7 @@ async def start(message: Message):
 
     if not await is_subscribed(message.from_user.id):
         await message.answer(
-            "<tg-emoji emoji-id='5278578973595427038'>🚫</tg-emoji> Доступ запрещен!\n\n"
-            "Для того,чтобы пользоваться ботом,необходимо подписаться на информационный ресурс проекта",
+            "🚫 Доступ запрещен!\n\nПодпишитесь на канал",
             reply_markup=sub_keyboard()
         )
         return
@@ -171,16 +188,13 @@ async def start(message: Message):
     )
 
 
-# ================= CHECK SUB =================
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(callback: CallbackQuery):
 
     await ensure_user(callback.from_user.id)
 
     if await is_subscribed(callback.from_user.id):
-
         await callback.message.delete()
-
         await callback.message.answer(
             await profile_text(callback.from_user.id),
             reply_markup=profile_keyboard(callback.from_user.id)
@@ -190,8 +204,8 @@ async def check_sub(callback: CallbackQuery):
 
 
 # ================= ADMIN =================
-@dp.callback_query(F.data == "admin_panel")
-async def admin_panel(callback: CallbackQuery):
+@dp.callback_query(F.data == "admin")
+async def admin(callback: CallbackQuery):
 
     if callback.from_user.id != ADMIN_ID:
         return
@@ -199,13 +213,13 @@ async def admin_panel(callback: CallbackQuery):
     settings = await get_settings()
 
     await callback.message.edit_text(
-        "<tg-emoji emoji-id='5276314275994954605'>🔨</tg-emoji> Вы перешли в панель администратора,выберите следующее действие:",
+        "🔨 Админ панель",
         reply_markup=admin_keyboard(settings)
     )
 
 
 @dp.callback_query(F.data == "toggle_status")
-async def toggle_status_handler(callback: CallbackQuery):
+async def toggle(callback: CallbackQuery):
 
     if callback.from_user.id != ADMIN_ID:
         return
@@ -242,8 +256,8 @@ async def change_rate(callback: CallbackQuery):
     )
 
 
-@dp.callback_query(F.data == "back_profile")
-async def back_profile(callback: CallbackQuery):
+@dp.callback_query(F.data == "back")
+async def back(callback: CallbackQuery):
 
     await callback.message.delete()
 
@@ -253,15 +267,15 @@ async def back_profile(callback: CallbackQuery):
     )
 
 
-# ================= WITHDRAW =================
 @dp.callback_query(F.data == "withdraw")
 async def withdraw(callback: CallbackQuery):
-    await callback.answer("Функция временно недоступна", show_alert=True)
+    await callback.answer("Функция позже")
 
 
 # ================= MAIN =================
 async def main():
     await init_db()
+    start_scheduler()
     await dp.start_polling(bot)
 
 

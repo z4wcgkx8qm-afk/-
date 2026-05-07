@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import asyncpg
@@ -13,7 +14,6 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
@@ -22,9 +22,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 GROUP_ID = int(os.getenv("GROUP_ID"))
-CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 DATABASE_URL = os.getenv("DATABASE_URL")
-
+CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 
 bot = Bot(
     token=TOKEN,
@@ -33,10 +32,6 @@ bot = Bot(
 
 dp = Dispatcher()
 db: asyncpg.Pool = None
-
-
-# ================= ACTIVE REQUEST =================
-active_request = None
 
 
 # ================= DB =================
@@ -48,13 +43,9 @@ async def init_db():
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
-        balance NUMERIC DEFAULT 0
+        balance NUMERIC DEFAULT 0,
+        today_earn NUMERIC DEFAULT 0
     );
-    """)
-
-    await db.execute("""
-    ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS today_earn NUMERIC DEFAULT 0;
     """)
 
     await db.execute("""
@@ -69,6 +60,16 @@ async def init_db():
     ON CONFLICT DO NOTHING;
     """)
 
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS requests (
+        id SERIAL PRIMARY KEY,
+        channel_msg_id BIGINT,
+        status TEXT DEFAULT 'open',
+        taken_by BIGINT,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+    """)
+
 
 # ================= USERS =================
 async def ensure_user(user_id: int):
@@ -80,9 +81,7 @@ async def ensure_user(user_id: int):
 
 
 async def get_user(user_id: int):
-    return await db.fetchrow("""
-        SELECT * FROM users WHERE user_id = $1
-    """, user_id)
+    return await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
 
 
 # ================= SETTINGS =================
@@ -109,81 +108,52 @@ async def set_rate(rate: float):
     """, rate)
 
 
-# ================= SUB CHECK =================
-async def is_subscribed(user_id: int):
-    member = await bot.get_chat_member(CHANNEL_ID, user_id)
-    return member.status in ["member", "administrator", "creator"]
-
-
 # ================= PROFILE =================
 async def profile_text(user_id: int):
 
-    settings = await get_settings()
     user = await get_user(user_id)
+    settings = await get_settings()
 
-    user = dict(user)
+    user = dict(user or {})
     user.setdefault("balance", 0)
     user.setdefault("today_earn", 0)
 
     return (
-        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
-        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
-        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{float(user['today_earn']):.2f} USDT</code>\n"
-        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{float(user['balance']):.2f} USDT</code>\n"
-        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: <code>{settings['status']}</code>"
+        "<b>👤 Ваш профиль:</b>\n\n"
+        f"🔓 ID Аккаунта: <code>{user_id}</code>\n"
+        f"📊 Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
+        f"💼 Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
+        f"🕓 Статус бота: <code>{settings['status']}</code>"
     )
 
 
 # ================= KEYBOARDS =================
-def sub_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Подписаться", url=CHANNEL_LINK)],
-        [InlineKeyboardButton(text="Проверить", callback_data="check_sub")]
-    ])
-
-
-def profile_keyboard(user_id: int):
+def profile_kb(user_id: int):
     kb = [
         [InlineKeyboardButton(text="Вывести", callback_data="withdraw")]
     ]
 
     if user_id == ADMIN_ID:
-        kb.append([
-            InlineKeyboardButton(text="Перейти в настройки", callback_data="admin")
-        ])
+        kb.append([InlineKeyboardButton(text="Настройки", callback_data="admin")])
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
-def request_keyboard():
+def request_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Сдать номер", callback_data="take_request")]
+        [InlineKeyboardButton(
+            text="Сдать номер",
+            callback_data=f"take_{req_id}"
+        )]
     ])
 
 
-def admin_keyboard(settings):
+def admin_kb(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
-        [InlineKeyboardButton(text=f"Ставка за номер: {settings['rate']}", callback_data="change_rate")],
+        [InlineKeyboardButton(text=f"Ставка: {settings['rate']}", callback_data="change_rate")],
         [InlineKeyboardButton(text="Назад", callback_data="back")]
     ])
-
-
-# ================= RESET DAILY =================
-async def reset_daily():
-    await db.execute("""
-        UPDATE users
-        SET today_earn = 0
-    """)
-    print("Daily reset done")
-
-
-scheduler = AsyncIOScheduler(timezone=pytz.timezone("Europe/Moscow"))
-
-
-def start_scheduler():
-    scheduler.add_job(reset_daily, "cron", hour=6, minute=0)
-    scheduler.start()
 
 
 # ================= START =================
@@ -192,41 +162,15 @@ async def start(message: Message):
 
     await ensure_user(message.from_user.id)
 
-    if not await is_subscribed(message.from_user.id):
-        await message.answer(
-            "<tg-emoji emoji-id='5278578973595427038'>🚫</tg-emoji> Доступ запрещен!\n\n"
-            "Для того,чтобы пользоваться ботом,необходимо подписаться на информационный ресурс проекта",
-            reply_markup=sub_keyboard()
-        )
-        return
-
     await message.answer(
         await profile_text(message.from_user.id),
-        reply_markup=profile_keyboard(message.from_user.id)
+        reply_markup=profile_kb(message.from_user.id)
     )
-
-
-# ================= CHECK SUB =================
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(callback: CallbackQuery):
-
-    await ensure_user(callback.from_user.id)
-
-    if await is_subscribed(callback.from_user.id):
-        await callback.message.delete()
-        await callback.message.answer(
-            await profile_text(callback.from_user.id),
-            reply_markup=profile_keyboard(callback.from_user.id)
-        )
-    else:
-        await callback.answer("Вы не подписаны", show_alert=True)
 
 
 # ================= ADD REQUEST =================
 @dp.message(Command("add"))
 async def add_request(message: Message):
-
-    global active_request
 
     if message.chat.id != GROUP_ID:
         return
@@ -234,35 +178,55 @@ async def add_request(message: Message):
     sent = await bot.send_message(
         CHANNEL_ID,
         "<b>💼 Срочно нужен номер!</b>\n"
-        "Кто первый нажмёт, того и заявка",
-        reply_markup=request_keyboard()
+        "Кто первый нажмёт, того и заявка"
     )
 
-    active_request = {
-        "channel_msg_id": sent.message_id
-    }
+    req = await db.fetchrow("""
+        INSERT INTO requests (channel_msg_id)
+        VALUES ($1)
+        RETURNING id
+    """, sent.message_id)
+
+    await bot.edit_message_reply_markup(
+        CHANNEL_ID,
+        sent.message_id,
+        reply_markup=request_kb(req["id"])
+    )
 
     await message.answer("Заявка создана")
 
 
 # ================= TAKE REQUEST =================
-@dp.callback_query(F.data == "take_request")
+@dp.callback_query(F.data.startswith("take_"))
 async def take_request(callback: CallbackQuery):
 
-    global active_request
+    req_id = int(callback.data.split("_")[1])
 
-    if not active_request:
-        await callback.answer("Заявка уже закрыта", show_alert=True)
+    req = await db.fetchrow("""
+        SELECT * FROM requests WHERE id = $1
+    """, req_id)
+
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
         return
 
-    await bot.delete_message(CHANNEL_ID, active_request["channel_msg_id"])
+    updated = await db.execute("""
+        UPDATE requests
+        SET status = 'taken',
+            taken_by = $2
+        WHERE id = $1 AND status = 'open'
+    """, req_id, callback.from_user.id)
+
+    if updated == "UPDATE 0":
+        await callback.answer("Уже занято", show_alert=True)
+        return
+
+    await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
 
     await bot.send_message(
         GROUP_ID,
         f"✅ Заявка принята от: @{callback.from_user.username}"
     )
-
-    active_request = None
 
     await callback.answer("Принято")
 
@@ -277,30 +241,24 @@ async def admin(callback: CallbackQuery):
     settings = await get_settings()
 
     await callback.message.edit_text(
-        "<tg-emoji emoji-id='5276314275994954605'>🔨</tg-emoji> Вы перешли в панель администратора,выберите следующее действие:",
-        reply_markup=admin_keyboard(settings)
+        "🔨 Панель администратора",
+        reply_markup=admin_kb(settings)
     )
 
 
 @dp.callback_query(F.data == "toggle_status")
 async def toggle(callback: CallbackQuery):
 
-    if callback.from_user.id != ADMIN_ID:
-        return
-
     await toggle_status()
     settings = await get_settings()
 
     await callback.message.edit_reply_markup(
-        reply_markup=admin_keyboard(settings)
+        reply_markup=admin_kb(settings)
     )
 
 
 @dp.callback_query(F.data == "change_rate")
 async def change_rate(callback: CallbackQuery):
-
-    if callback.from_user.id != ADMIN_ID:
-        return
 
     options = [4.00, 4.25, 4.50, 4.75, 5.00]
 
@@ -308,13 +266,14 @@ async def change_rate(callback: CallbackQuery):
     current = float(settings["rate"])
 
     idx = options.index(current)
-    new_rate = options[(idx + 1) % len(options)]
+    new = options[(idx + 1) % len(options)]
 
-    await set_rate(new_rate)
+    await set_rate(new)
+
     settings = await get_settings()
 
     await callback.message.edit_reply_markup(
-        reply_markup=admin_keyboard(settings)
+        reply_markup=admin_kb(settings)
     )
 
 
@@ -325,19 +284,18 @@ async def back(callback: CallbackQuery):
 
     await callback.message.answer(
         await profile_text(callback.from_user.id),
-        reply_markup=profile_keyboard(callback.from_user.id)
+        reply_markup=profile_kb(callback.from_user.id)
     )
 
 
 @dp.callback_query(F.data == "withdraw")
 async def withdraw(callback: CallbackQuery):
-    await callback.answer("Функция позже")
+    await callback.answer("Позже")
 
 
 # ================= MAIN =================
 async def main():
     await init_db()
-    start_scheduler()
     await dp.start_polling(bot)
 
 

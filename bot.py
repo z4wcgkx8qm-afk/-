@@ -22,7 +22,7 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 
-BOT_USERNAME = os.getenv("BOT_USERNAME").replace("@", "")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "").replace("@", "")
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -35,7 +35,6 @@ async def init_db():
 
     db = await asyncpg.create_pool(DATABASE_URL)
 
-    # USERS
     await db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -44,7 +43,6 @@ async def init_db():
     );
     """)
 
-    # SETTINGS
     await db.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         id INT PRIMARY KEY,
@@ -57,26 +55,18 @@ async def init_db():
     ON CONFLICT DO NOTHING;
     """)
 
-    # REQUESTS BASE TABLE
     await db.execute("""
     CREATE TABLE IF NOT EXISTS requests (
         id SERIAL PRIMARY KEY,
         channel_msg_id BIGINT,
         status TEXT DEFAULT 'open',
         taken_by BIGINT,
+        format TEXT,
+        qr_state BOOLEAN DEFAULT FALSE,
+        accepted BOOLEAN DEFAULT FALSE,
+        slotted BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
     );
-    """)
-
-    # ================= AUTO MIGRATIONS =================
-    await db.execute("""
-    ALTER TABLE requests
-    ADD COLUMN IF NOT EXISTS format TEXT;
-    """)
-
-    await db.execute("""
-    ALTER TABLE requests
-    ADD COLUMN IF NOT EXISTS qr_state BOOLEAN DEFAULT FALSE;
     """)
 
 
@@ -89,10 +79,6 @@ async def ensure_user(user_id: int):
     """, user_id)
 
 
-async def get_user(user_id: int):
-    return await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
-
-
 # ================= SETTINGS =================
 async def get_settings():
     return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
@@ -100,7 +86,7 @@ async def get_settings():
 
 # ================= PROFILE =================
 async def profile_text(user_id: int):
-    user = await get_user(user_id)
+    user = await db.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
     settings = await get_settings()
 
     user = dict(user or {})
@@ -108,11 +94,11 @@ async def profile_text(user_id: int):
     user.setdefault("today_earn", 0)
 
     return (
-        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
-        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
-        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
-        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
-        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
+        "<b>👤 Профиль</b>\n\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Баланс: <code>{float(user['balance']):.2f}</code>\n"
+        f"Сегодня: <code>{float(user['today_earn']):.2f}</code>\n"
+        f"Статус: {settings['status']}"
     )
 
 
@@ -128,59 +114,59 @@ def request_kb(req_id: int):
 
 def cancel_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Отменить заявку",
-            callback_data=f"cancel_{req_id}"
-        )]
+        [InlineKeyboardButton(text="Отменить", callback_data=f"cancel_{req_id}")]
     ])
 
 
-def to_channel_kb():
+def service_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Перейти в канал",
-            url=CHANNEL_LINK
-        )]
+        [
+            InlineKeyboardButton(text="Номер принят", callback_data=f"accept_{req_id}"),
+            InlineKeyboardButton(text="СЛЁТ", callback_data=f"slip_{req_id}")
+        ]
     ])
 
 
-# ================= CREATE REQUESTS =================
-@dp.message(F.text.lower() == "куар")
-async def create_qr(message: Message):
-    await create_request(message, "QR")
-
-
-@dp.message(F.text.lower() == "код")
-async def create_code(message: Message):
-    await create_request(message, "CODE")
-
-
+# ================= CREATE =================
 async def create_request(message: Message, fmt: str):
 
     req = await db.fetchrow("""
-        INSERT INTO requests (channel_msg_id, format)
-        VALUES (0, $1)
+        INSERT INTO requests (format, channel_msg_id)
+        VALUES ($1, 0)
         RETURNING id
     """, fmt)
 
     sent = await bot.send_message(
         CHANNEL_ID,
-        f"<b><tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Срочно нужен номер!</b>\n"
-        f"Кто первый нажмёт, того и заявка\n"
+        f"<b>💼 Срочно нужен номер!</b>\n"
+        f"Кто первый нажмёт — тот заберёт\n"
         f"Формат: {fmt}",
         reply_markup=request_kb(req["id"])
     )
 
     await db.execute("""
-        UPDATE requests
-        SET channel_msg_id = $1
-        WHERE id = $2
+        UPDATE requests SET channel_msg_id=$1 WHERE id=$2
     """, sent.message_id, req["id"])
 
     await message.answer("Заявка создана")
 
 
-# ================= START =================
+@dp.message(F.text)
+async def handle_text(message: Message):
+
+    if not message.text:
+        return
+
+    text = message.text.lower().strip()
+
+    if text == "куар":
+        await create_request(message, "QR")
+
+    elif text == "код":
+        await create_request(message, "CODE")
+
+
+# ================= TAKE =================
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -192,78 +178,123 @@ async def start(message: Message):
 
         req_id = int(args[1].split("_")[1])
 
-        req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
+        req = await db.fetchrow("SELECT * FROM requests WHERE id=$1", req_id)
 
         if not req:
-            await message.answer("❌ Не найдена")
-            return
-
-        if req["status"] != "open":
-            await message.answer("❌ Уже занято")
-            return
+            return await message.answer("Не найдено")
 
         await db.execute("""
-            UPDATE requests
-            SET status = 'taken',
-                taken_by = $2
-            WHERE id = $1
+            UPDATE requests SET status='taken', taken_by=$2 WHERE id=$1
         """, req_id, message.from_user.id)
 
-        await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
-
-        text = (
-            f"Принята заявка #{req_id}\n"
-            f"• Формат: {req['format']}\n"
-        )
-
-        if req["format"] == "QR":
-            text += "• Ожидайте получения qr со стороны сервиса."
-
+        # группа
         await bot.send_message(
             GROUP_ID,
-            text,
-            reply_markup=cancel_kb(req_id)
+            f"🕓 Принята заявка #{req_id}\n• Формат: {req['format']}",
+            reply_markup=service_kb(req_id)
         )
 
-        await message.answer("Принято")
+        # юзер
+        await bot.send_message(
+            message.from_user.id,
+            f"🕓 Принята заявка #{req_id}\nОжидайте QR"
+        )
+
+
+# ================= ACCEPT =================
+@dp.callback_query(F.data.startswith("accept_"))
+async def accept(call: CallbackQuery):
+
+    req_id = int(call.data.split("_")[1])
+
+    req = await db.fetchrow("SELECT * FROM requests WHERE id=$1", req_id)
+
+    await db.execute("""
+        UPDATE requests SET accepted=TRUE WHERE id=$1
+    """, req_id)
+
+    await bot.send_message(
+        req["taken_by"],
+        f"💼 Номер по заявке #{req_id} принят"
+    )
+
+    asyncio.create_task(payout(req_id, req["taken_by"]))
+
+    await call.answer()
+
+
+async def payout(req_id: int, user_id: int):
+    await asyncio.sleep(330)
+
+    req = await db.fetchrow("SELECT * FROM requests WHERE id=$1", req_id)
+
+    if not req or req["slotted"]:
         return
 
-    await message.answer(
-        await profile_text(message.from_user.id)
+    if not req["accepted"]:
+        return
+
+    settings = await get_settings()
+
+    await db.execute("""
+        UPDATE users SET balance = balance + $1 WHERE user_id=$2
+    """, settings["rate"], user_id)
+
+
+# ================= SLIP =================
+@dp.callback_query(F.data.startswith("slip_"))
+async def slip(call: CallbackQuery):
+
+    req_id = int(call.data.split("_")[1])
+
+    req = await db.fetchrow("SELECT * FROM requests WHERE id=$1", req_id)
+
+    await db.execute("""
+        UPDATE requests SET slotted=TRUE WHERE id=$1
+    """, req_id)
+
+    await bot.send_message(
+        req["taken_by"],
+        "🗑 Номер слетел"
     )
+
+    await call.answer()
 
 
 # ================= CANCEL =================
 @dp.callback_query(F.data.startswith("cancel_"))
-async def cancel(callback: CallbackQuery):
+async def cancel(call: CallbackQuery):
 
-    req_id = int(callback.data.split("_")[1])
+    await call.message.delete()
+    await call.answer()
 
-    req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
+
+# ================= QR FROM GROUP =================
+@dp.message(F.photo)
+async def qr_handler(message: Message):
+
+    req = await db.fetchrow("""
+        SELECT * FROM requests
+        WHERE qr_state = TRUE AND status='taken'
+        ORDER BY id DESC LIMIT 1
+    """)
 
     if not req:
-        await callback.answer("Не найдено")
         return
 
     await db.execute("""
-        UPDATE requests
-        SET status = 'cancelled'
-        WHERE id = $1
-    """, req_id)
+        UPDATE requests SET qr_state=FALSE WHERE id=$1
+    """, req["id"])
 
-    if req["taken_by"]:
-        await bot.send_message(
-            req["taken_by"],
-            f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
-            f"Заявка #{req_id} отменена",
-            reply_markup=to_channel_kb()
-        )
-
-    await callback.message.delete()
-    await callback.answer("Ок")
+    await bot.send_photo(
+        req["taken_by"],
+        message.photo[-1].file_id,
+        caption="⏱ 2 минуты на сканирование",
+        reply_markup=cancel_kb(req["id"])
+    )
 
 
-# ================= MAIN =================
+# ================= RUN =================
 async def main():
     await init_db()
     await dp.start_polling(bot)

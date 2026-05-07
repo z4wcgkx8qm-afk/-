@@ -22,26 +22,15 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK")
 
-raw_username = os.getenv("BOT_USERNAME")
-if not raw_username:
-    raise ValueError("BOT_USERNAME is not set")
+BOT_USERNAME = os.getenv("BOT_USERNAME").replace("@", "")
 
-BOT_USERNAME = raw_username.replace("@", "")
-
-
-bot = Bot(
-    token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 db: asyncpg.Pool = None
-
 
 # ================= DB =================
 async def init_db():
     global db
-
     db = await asyncpg.create_pool(DATABASE_URL)
 
     await db.execute("""
@@ -59,9 +48,7 @@ async def init_db():
         status TEXT DEFAULT 'Стартворк'
     );
 
-    INSERT INTO settings (id)
-    VALUES (1)
-    ON CONFLICT DO NOTHING;
+    INSERT INTO settings (id) VALUES (1) ON CONFLICT DO NOTHING;
     """)
 
     await db.execute("""
@@ -70,6 +57,8 @@ async def init_db():
         channel_msg_id BIGINT,
         status TEXT DEFAULT 'open',
         taken_by BIGINT,
+        format TEXT,
+        qr_state BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
     );
     """)
@@ -85,10 +74,7 @@ async def ensure_user(user_id: int):
 
 
 async def get_user(user_id: int):
-    return await db.fetchrow(
-        "SELECT * FROM users WHERE user_id = $1",
-        user_id
-    )
+    return await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
 
 
 # ================= SETTINGS =================
@@ -96,28 +82,8 @@ async def get_settings():
     return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
 
 
-async def toggle_status():
-    await db.execute("""
-        UPDATE settings
-        SET status = CASE
-            WHEN status = 'Стартворк' THEN 'Стопворк'
-            ELSE 'Стартворк'
-        END
-        WHERE id = 1
-    """)
-
-
-async def set_rate(rate: float):
-    await db.execute("""
-        UPDATE settings
-        SET rate = $1
-        WHERE id = 1
-    """, rate)
-
-
 # ================= PROFILE =================
 async def profile_text(user_id: int):
-
     user = await get_user(user_id)
     settings = await get_settings()
 
@@ -135,59 +101,61 @@ async def profile_text(user_id: int):
 
 
 # ================= KEYBOARDS =================
-def profile_kb(user_id: int):
-    kb = [
-        [InlineKeyboardButton(text="Вывести", callback_data="withdraw")]
-    ]
-
-    if user_id == ADMIN_ID:
-        kb.append([InlineKeyboardButton(text="Настройки", callback_data="admin")])
-
-    return InlineKeyboardMarkup(inline_keyboard=kb)
-
-
 def request_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="Сдать номер",
-                url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
-            )
-        ]
-    ])
-
-
-def admin_kb(settings):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
-        [InlineKeyboardButton(text=f"Ставка: {settings['rate']}", callback_data="change_rate")],
-        [InlineKeyboardButton(text="Назад", callback_data="back")]
+        [InlineKeyboardButton(text="Сдать номер", url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}")]
     ])
 
 
 def cancel_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="Отменить заявку",
-                callback_data=f"cancel_{req_id}"
-            )
-        ]
+        [InlineKeyboardButton(text="Отменить заявку", callback_data=f"cancel_{req_id}")]
     ])
 
 
 def to_channel_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="Перейти в канал",
-                url=CHANNEL_LINK
-            )
-        ]
+        [InlineKeyboardButton(text="Перейти в канал", url=CHANNEL_LINK)]
     ])
 
 
-# ================= START =================
+# ================= CREATE REQUESTS =================
+@dp.message(F.text.lower() == "куар")
+async def create_qr(message: Message):
+    await create_request(message, "QR")
+
+
+@dp.message(F.text.lower() == "код")
+async def create_code(message: Message):
+    await create_request(message, "CODE")
+
+
+async def create_request(message: Message, fmt: str):
+
+    req = await db.fetchrow("""
+        INSERT INTO requests (channel_msg_id, format)
+        VALUES (0, $1)
+        RETURNING id
+    """, fmt)
+
+    sent = await bot.send_message(
+        CHANNEL_ID,
+        f"<b><tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Срочно нужен номер!</b>\n"
+        f"Кто первый нажмёт, того и заявка\n"
+        f"Формат: {fmt}",
+        reply_markup=request_kb(req["id"])
+    )
+
+    await db.execute("""
+        UPDATE requests
+        SET channel_msg_id = $1
+        WHERE id = $2
+    """, sent.message_id, req["id"])
+
+    await message.answer("Заявка создана")
+
+
+# ================= TAKE REQUEST =================
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -202,104 +170,104 @@ async def start(message: Message):
         req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
         if not req:
-            await message.answer("❌ Заявка не найдена")
+            await message.answer("❌ Не найдена")
             return
 
         if req["status"] != "open":
             await message.answer("❌ Уже занято")
             return
 
-        updated = await db.execute("""
+        await db.execute("""
             UPDATE requests
             SET status = 'taken',
                 taken_by = $2
-            WHERE id = $1 AND status = 'open'
+            WHERE id = $1
         """, req_id, message.from_user.id)
-
-        if updated == "UPDATE 0":
-            await message.answer("❌ Уже забрали")
-            return
 
         await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
 
+        text = (
+            f"Принята заявка #{req_id}\n"
+            f"• Формат: {req['format']}\n"
+        )
+
+        if req["format"] == "QR":
+            text += "• Ожидайте получения qr со стороны сервиса."
+
         await bot.send_message(
             GROUP_ID,
-            f"Принята заявка под номером <code>#{req_id}</code>\n\n"
-            f"• Пользователь: @{message.from_user.username or 'user'}\n"
-            f"• Формат: <code>CODE</code>",
+            text,
             reply_markup=cancel_kb(req_id)
         )
 
-        await message.answer("➕ Вы приняли заявку")
+        # QR FLOW
+        if req["format"] == "QR":
+            await bot.send_message(
+                ADMIN_ID,
+                f"Заявка QR #{req_id}\n• Прикрепите QR"
+            )
+
+            await db.execute("""
+                UPDATE requests SET qr_state = TRUE WHERE id = $1
+            """, req_id)
+
+        await message.answer("Принято")
         return
 
-    await message.answer(
-        await profile_text(message.from_user.id),
-        reply_markup=profile_kb(message.from_user.id)
-    )
 
-
-# ================= ADD REQUEST =================
-@dp.message(Command("add"))
-async def add_request(message: Message):
-
-    if message.chat.id != GROUP_ID:
-        return
-
-    req = await db.fetchrow("""
-        INSERT INTO requests (channel_msg_id)
-        VALUES (0)
-        RETURNING id
-    """)
-
-    sent = await bot.send_message(
-        CHANNEL_ID,
-        "<b><tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Срочно нужен номер!</b>\n"
-        "Кто первый нажмёт, того и заявка",
-        reply_markup=request_kb(req["id"])
-    )
-
-    await db.execute("""
-        UPDATE requests
-        SET channel_msg_id = $1
-        WHERE id = $2
-    """, sent.message_id, req["id"])
-
-    await message.answer("Заявка создана")
-
-
-# ================= CANCEL REQUEST =================
+# ================= CANCEL =================
 @dp.callback_query(F.data.startswith("cancel_"))
-async def cancel_request(callback: CallbackQuery):
+async def cancel(callback: CallbackQuery):
 
     req_id = int(callback.data.split("_")[1])
 
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
     if not req:
-        await callback.answer("Заявка не найдена")
-        return
-
-    if not req["taken_by"]:
-        await callback.answer("Нет исполнителя")
+        await callback.answer("Не найдено")
         return
 
     await db.execute("""
-        UPDATE requests
-        SET status = 'cancelled'
-        WHERE id = $1
+        UPDATE requests SET status = 'cancelled' WHERE id = $1
     """, req_id)
 
-    await bot.send_message(
-        req["taken_by"],
-        f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
-        f"Заявка <code>#{req_id}</code>\n"
-        f"Отменена администратором, дождитесь новой",
-        reply_markup=to_channel_kb()
-    )
+    if req["taken_by"]:
+        await bot.send_message(
+            req["taken_by"],
+            f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
+            f"Заявка #{req_id} отменена администратором",
+            reply_markup=to_channel_kb()
+        )
 
     await callback.message.delete()
-    await callback.answer("Заявка отменена")
+    await callback.answer("Отменено")
+
+
+# ================= QR IMAGE HANDLER =================
+@dp.message(F.photo)
+async def handle_qr(message: Message):
+
+    req = await db.fetchrow("""
+        SELECT * FROM requests
+        WHERE qr_state = TRUE AND status = 'taken'
+        ORDER BY id DESC LIMIT 1
+    """)
+
+    if not req:
+        return
+
+    await db.execute("""
+        UPDATE requests SET qr_state = FALSE WHERE id = $1
+    """, req["id"])
+
+    await bot.send_photo(
+        req["taken_by"],
+        message.photo[-1].file_id,
+        caption="⏱ Время на сканирование: 2 минуты",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отменить", callback_data=f"cancel_{req['id']}")]
+        ])
+    )
 
 
 # ================= MAIN =================

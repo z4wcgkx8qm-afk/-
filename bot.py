@@ -54,6 +54,29 @@ def sub_keyboard():
     )
 
 
+def profile_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Вывести",
+                    callback_data="withdraw"
+                )
+            ]
+        ]
+    )
+
+
+def profile_text(user_id: int):
+    return (
+        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
+        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
+        "<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>0.00 USDT</code>\n"
+        "<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>0.00 USDT</code>\n"
+        "<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: В работе"
+    )
+
+
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -66,7 +89,10 @@ async def start(message: Message):
         )
         return
 
-    await message.answer("запущено")
+    await message.answer(
+        profile_text(message.from_user.id),
+        reply_markup=profile_keyboard()
+    )
 
 
 @dp.callback_query(F.data == "check_sub")
@@ -75,13 +101,18 @@ async def check_sub(callback: CallbackQuery):
     if await is_subscribed(callback.from_user.id):
 
         await callback.message.delete()
-        await callback.message.answer("запущено")
 
-    else:
-        await callback.answer(
-            "Вы не подписаны",
-            show_alert=True
+        await callback.message.answer(
+            profile_text(callback.from_user.id),
+            reply_markup=profile_keyboard()
         )
+    else:
+        await callback.answer("Вы не подписаны", show_alert=True)
+
+
+@dp.callback_query(F.data == "withdraw")
+async def withdraw(callback: CallbackQuery):
+    await callback.answer("Функция временно недоступна", show_alert=True)
 
 
 async def main():

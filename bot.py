@@ -20,7 +20,13 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
-BOT_USERNAME = os.getenv("BOT_USERNAME").replace("@", "")
+
+raw_username = os.getenv("BOT_USERNAME")
+if not raw_username:
+    raise ValueError("BOT_USERNAME is not set")
+
+BOT_USERNAME = raw_username.replace("@", "")
+
 
 bot = Bot(
     token=TOKEN,
@@ -31,7 +37,7 @@ dp = Dispatcher()
 db: asyncpg.Pool = None
 
 
-# ================= DB =================
+# ================= DB INIT =================
 async def init_db():
     global db
 
@@ -78,7 +84,10 @@ async def ensure_user(user_id: int):
 
 
 async def get_user(user_id: int):
-    return await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+    return await db.fetchrow(
+        "SELECT * FROM users WHERE user_id = $1",
+        user_id
+    )
 
 
 # ================= SETTINGS =================
@@ -105,7 +114,7 @@ async def set_rate(rate: float):
     """, rate)
 
 
-# ================= PROFILE =================
+# ================= PROFILE (ТВОЙ ДИЗАЙН) =================
 async def profile_text(user_id: int):
 
     user = await get_user(user_id)
@@ -116,11 +125,11 @@ async def profile_text(user_id: int):
     user.setdefault("today_earn", 0)
 
     return (
-        "<b>👤 Ваш профиль:</b>\n\n"
-        f"🔓 ID: <code>{user_id}</code>\n"
-        f"📊 Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
-        f"💼 Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
-        f"🕓 Статус: <code>{settings['status']}</code>"
+        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
+        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
+        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
+        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
+        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
     )
 
 
@@ -147,8 +156,14 @@ def request_kb(req_id: int):
 
 def admin_kb(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
-        [InlineKeyboardButton(text=f"Ставка: {settings['rate']}", callback_data="change_rate")],
+        [InlineKeyboardButton(
+            text=f"Статус: {settings['status']}",
+            callback_data="toggle_status"
+        )],
+        [InlineKeyboardButton(
+            text=f"Ставка: {settings['rate']}",
+            callback_data="change_rate"
+        )],
         [InlineKeyboardButton(text="Назад", callback_data="back")]
     ])
 
@@ -161,14 +176,15 @@ async def start(message: Message):
 
     args = message.text.split()
 
-    # ===== ЗАЯВКА =====
+    # ===== TAKE REQUEST =====
     if len(args) > 1 and args[1].startswith("take_"):
 
         req_id = int(args[1].split("_")[1])
 
-        req = await db.fetchrow("""
-            SELECT * FROM requests WHERE id = $1
-        """, req_id)
+        req = await db.fetchrow(
+            "SELECT * FROM requests WHERE id = $1",
+            req_id
+        )
 
         if not req:
             await message.answer("❌ Заявка не найдена")
@@ -199,7 +215,7 @@ async def start(message: Message):
         await message.answer("➕ Вы приняли заявку")
         return
 
-    # ===== ПРОФИЛЬ =====
+    # ===== PROFILE =====
     await message.answer(
         await profile_text(message.from_user.id),
         reply_markup=profile_kb(message.from_user.id)

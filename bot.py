@@ -22,6 +22,7 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 raw_username = os.getenv("BOT_USERNAME")
+
 if not raw_username:
     raise ValueError("BOT_USERNAME is not set")
 
@@ -30,7 +31,9 @@ BOT_USERNAME = raw_username.replace("@", "")
 
 bot = Bot(
     token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    default=DefaultBotProperties(
+        parse_mode=ParseMode.HTML
+    )
 )
 
 dp = Dispatcher()
@@ -76,6 +79,7 @@ async def init_db():
 
 # ================= USERS =================
 async def ensure_user(user_id: int):
+
     await db.execute("""
         INSERT INTO users (user_id)
         VALUES ($1)
@@ -84,24 +88,29 @@ async def ensure_user(user_id: int):
 
 
 async def get_user(user_id: int):
-    return await db.fetchrow(
-        "SELECT * FROM users WHERE user_id = $1",
-        user_id
-    )
+
+    return await db.fetchrow("""
+        SELECT * FROM users
+        WHERE user_id = $1
+    """, user_id)
 
 
 # ================= SETTINGS =================
 async def get_settings():
-    return await db.fetchrow(
-        "SELECT * FROM settings WHERE id = 1"
-    )
+
+    return await db.fetchrow("""
+        SELECT * FROM settings
+        WHERE id = 1
+    """)
 
 
 async def toggle_status():
+
     await db.execute("""
         UPDATE settings
         SET status = CASE
-            WHEN status = 'Стартворк' THEN 'Стопворк'
+            WHEN status = 'Стартворк'
+            THEN 'Стопворк'
             ELSE 'Стартворк'
         END
         WHERE id = 1
@@ -109,6 +118,7 @@ async def toggle_status():
 
 
 async def set_rate(rate: float):
+
     await db.execute("""
         UPDATE settings
         SET rate = $1
@@ -123,11 +133,14 @@ async def profile_text(user_id: int):
     settings = await get_settings()
 
     user = dict(user or {})
+
     user.setdefault("balance", 0)
     user.setdefault("today_earn", 0)
 
     return (
-        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
+        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> "
+        "Ваш профиль:\n\n"
+
         f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> "
         f"ID Аккаунта: <code>{user_id}</code>\n"
 
@@ -136,7 +149,8 @@ async def profile_text(user_id: int):
         f"<code>{float(user['today_earn']):.2f}</code> USDT\n"
 
         f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
-        f"Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
+        f"Баланс: "
+        f"<code>{float(user['balance']):.2f}</code> USDT\n"
 
         f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> "
         f"Статус бота: {settings['status']}"
@@ -163,7 +177,9 @@ def profile_kb(user_id: int):
             )
         ])
 
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(
+        inline_keyboard=buttons
+    )
 
 
 def request_kb(req_id: int):
@@ -334,6 +350,14 @@ async def cancel_request(callback: CallbackQuery):
         await callback.answer("Нет исполнителя")
         return
 
+    # ===== статус =====
+    await db.execute("""
+        UPDATE requests
+        SET status = 'cancelled'
+        WHERE id = $1
+    """, req_id)
+
+    # ===== сообщение пользователю =====
     await bot.send_message(
         req["taken_by"],
         f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
@@ -350,6 +374,9 @@ async def cancel_request(callback: CallbackQuery):
             ]
         )
     )
+
+    # ===== удалить сообщение в группе =====
+    await callback.message.delete()
 
     await callback.answer("Заявка отменена")
 
@@ -417,12 +444,15 @@ async def back(callback: CallbackQuery):
 # ================= WITHDRAW =================
 @dp.callback_query(F.data == "withdraw")
 async def withdraw(callback: CallbackQuery):
+
     await callback.answer("Позже")
 
 
 # ================= MAIN =================
 async def main():
+
     await init_db()
+
     await dp.start_polling(bot)
 
 

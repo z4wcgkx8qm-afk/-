@@ -122,9 +122,9 @@ async def profile_text(user_id: int):
 
     return (
         "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
-        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: {user_id}\n"
-        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{user['today_earn']} USDT</code>\n"
-        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{user['balance']} USDT</code>\n"
+        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
+        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
+        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
         f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
     )
 

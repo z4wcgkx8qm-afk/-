@@ -1,6 +1,5 @@
 import os
 import asyncio
-import datetime
 
 from aiogram import Bot, Dispatcher, types
 from groq import Groq
@@ -15,28 +14,21 @@ dp = Dispatcher()
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- YEAR ---
-year = datetime.datetime.now().year
-
 
 # --- SYSTEM PROMPT ---
-SYSTEM = f"""
-Ты — Мыслитель, простой чат-бот для Telegram.
+SYSTEM = """
+Ты — Мыслитель, простой дружелюбный чат-бот для Telegram.
 
 Правила:
 - Пиши ТОЛЬКО на грамотном русском языке без ошибок
 - Отвечай кратко и по делу
-- Не задавай лишних вопросов пользователю
-- Не пиши "чем я могу помочь" и похожие фразы
+- Не задавай лишних вопросов
 - Не навязывай помощь
-- Отвечай только на то, что спросили
-
-Текущий год: {year}.
-Ты всегда знаешь текущий год и никогда не говоришь, что не знаешь его.
+- Общайся естественно, как обычный человек
 """
 
 
-# --- AI ---
+# --- AI FUNCTION ---
 def ask_ai(text: str):
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",

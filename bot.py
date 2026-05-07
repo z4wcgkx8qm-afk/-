@@ -92,7 +92,9 @@ async def get_user(user_id: int):
 
 # ================= SETTINGS =================
 async def get_settings():
-    return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
+    return await db.fetchrow(
+        "SELECT * FROM settings WHERE id = 1"
+    )
 
 
 async def toggle_status():
@@ -126,59 +128,82 @@ async def profile_text(user_id: int):
 
     return (
         "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
-        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
-        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
-        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
-        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
+        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> "
+        f"ID Аккаунта: <code>{user_id}</code>\n"
+
+        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> "
+        f"Заработано за сегодня: "
+        f"<code>{float(user['today_earn']):.2f}</code> USDT\n"
+
+        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
+        f"Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
+
+        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> "
+        f"Статус бота: {settings['status']}"
     )
 
 
 # ================= KEYBOARDS =================
 def profile_kb(user_id: int):
-    kb = [
-        [InlineKeyboardButton(text="Вывести", callback_data="withdraw")]
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="Вывести",
+                callback_data="withdraw"
+            )
+        ]
     ]
 
     if user_id == ADMIN_ID:
-        kb.append([
-            InlineKeyboardButton(text="Настройки", callback_data="admin")
+        buttons.append([
+            InlineKeyboardButton(
+                text="Настройки",
+                callback_data="admin"
+            )
         ])
 
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def request_kb(req_id: int):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="Сдать номер",
-                url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
-            )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Сдать номер",
+                    url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
+                )
+            ]
         ]
-    ])
+    )
 
 
 def admin_kb(settings):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=f"Статус: {settings['status']}",
-                callback_data="toggle_status"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"Ставка: {settings['rate']}",
-                callback_data="change_rate"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="Назад",
-                callback_data="back"
-            )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Статус: {settings['status']}",
+                    callback_data="toggle_status"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Ставка: {settings['rate']}",
+                    callback_data="change_rate"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Назад",
+                    callback_data="back"
+                )
+            ]
         ]
-    ])
+    )
 
 
 # ================= START =================
@@ -194,10 +219,10 @@ async def start(message: Message):
 
         req_id = int(args[1].split("_")[1])
 
-        req = await db.fetchrow(
-            "SELECT * FROM requests WHERE id = $1",
-            req_id
-        )
+        req = await db.fetchrow("""
+            SELECT * FROM requests
+            WHERE id = $1
+        """, req_id)
 
         if not req:
             await message.answer("❌ Заявка не найдена")
@@ -211,7 +236,8 @@ async def start(message: Message):
             UPDATE requests
             SET status = 'taken',
                 taken_by = $2
-            WHERE id = $1 AND status = 'open'
+            WHERE id = $1
+            AND status = 'open'
         """, req_id, message.from_user.id)
 
         if updated == "UPDATE 0":
@@ -225,8 +251,23 @@ async def start(message: Message):
 
         await bot.send_message(
             GROUP_ID,
-            f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> "
-            f"Заявка принята от: @{message.from_user.username or 'user'}"
+            f"Принята заявка под номером "
+            f"<code>#{req_id}</code>\n\n"
+
+            f"• Пользователь: "
+            f"@{message.from_user.username or 'user'}\n"
+
+            f"• Формат: <code>CODE</code>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="Отменить заявку",
+                            callback_data=f"cancel_{req_id}"
+                        )
+                    ]
+                ]
+            )
         )
 
         await message.answer("➕ Вы приняли заявку")
@@ -254,8 +295,10 @@ async def add_request(message: Message):
 
     sent = await bot.send_message(
         CHANNEL_ID,
-        "<b><tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
-        "Срочно нужен номер!</b>\n"
+        "<b>"
+        "<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
+        "Срочно нужен номер!"
+        "</b>\n"
         "Кто первый нажмёт, того и заявка",
         reply_markup=request_kb(req["id"])
     )
@@ -267,6 +310,48 @@ async def add_request(message: Message):
     """, sent.message_id, req["id"])
 
     await message.answer("Заявка создана")
+
+
+# ================= CANCEL REQUEST =================
+@dp.callback_query(F.data.startswith("cancel_"))
+async def cancel_request(callback: CallbackQuery):
+
+    if callback.from_user.id != ADMIN_ID:
+        return
+
+    req_id = int(callback.data.split("_")[1])
+
+    req = await db.fetchrow("""
+        SELECT * FROM requests
+        WHERE id = $1
+    """, req_id)
+
+    if not req:
+        await callback.answer("Заявка не найдена")
+        return
+
+    if not req["taken_by"]:
+        await callback.answer("Нет исполнителя")
+        return
+
+    await bot.send_message(
+        req["taken_by"],
+        f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
+        f"Заявка <code>#{req_id}</code>\n"
+        f"Отменена администратором, дождитесь новой",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Перейти в канал",
+                        url=f"https://t.me/c/{str(CHANNEL_ID).replace('-100', '')}"
+                    )
+                ]
+            ]
+        )
+    )
+
+    await callback.answer("Заявка отменена")
 
 
 # ================= ADMIN =================
@@ -302,12 +387,14 @@ async def change_rate(callback: CallbackQuery):
     options = [4.00, 4.25, 4.50, 4.75, 5.00]
 
     settings = await get_settings()
+
     current = float(settings["rate"])
 
     idx = options.index(current)
-    new = options[(idx + 1) % len(options)]
 
-    await set_rate(new)
+    new_rate = options[(idx + 1) % len(options)]
+
+    await set_rate(new_rate)
 
     settings = await get_settings()
 
@@ -327,6 +414,7 @@ async def back(callback: CallbackQuery):
     )
 
 
+# ================= WITHDRAW =================
 @dp.callback_query(F.data == "withdraw")
 async def withdraw(callback: CallbackQuery):
     await callback.answer("Позже")

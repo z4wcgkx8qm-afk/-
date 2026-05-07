@@ -1,14 +1,11 @@
 import os
 import asyncio
-from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types
 from groq import Groq
 
-load_dotenv()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -20,8 +17,14 @@ def ask_ai(text: str):
     response = client.chat.completions.create(
         model="llama-3.1-70b-versatile",
         messages=[
-            {"role": "system", "content": "Ты Мыслитель. Отвечай кратко и по делу."},
-            {"role": "user", "content": text}
+            {
+                "role": "system",
+                "content": "Ты Мыслитель. Отвечай кратко, умно и по делу."
+            },
+            {
+                "role": "user",
+                "content": text
+            }
         ]
     )
     return response.choices[0].message.content

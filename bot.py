@@ -114,7 +114,7 @@ async def set_rate(rate: float):
     """, rate)
 
 
-# ================= PROFILE (ТВОЙ ДИЗАЙН) =================
+# ================= PROFILE =================
 async def profile_text(user_id: int):
 
     user = await get_user(user_id)
@@ -140,31 +140,44 @@ def profile_kb(user_id: int):
     ]
 
     if user_id == ADMIN_ID:
-        kb.append([InlineKeyboardButton(text="Настройки", callback_data="admin")])
+        kb.append([
+            InlineKeyboardButton(text="Настройки", callback_data="admin")
+        ])
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 def request_kb(req_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Сдать номер",
-            url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
-        )]
+        [
+            InlineKeyboardButton(
+                text="Сдать номер",
+                url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
+            )
+        ]
     ])
 
 
 def admin_kb(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"Статус: {settings['status']}",
-            callback_data="toggle_status"
-        )],
-        [InlineKeyboardButton(
-            text=f"Ставка: {settings['rate']}",
-            callback_data="change_rate"
-        )],
-        [InlineKeyboardButton(text="Назад", callback_data="back")]
+        [
+            InlineKeyboardButton(
+                text=f"Статус: {settings['status']}",
+                callback_data="toggle_status"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Ставка: {settings['rate']}",
+                callback_data="change_rate"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data="back"
+            )
+        ]
     ])
 
 
@@ -205,11 +218,15 @@ async def start(message: Message):
             await message.answer("❌ Уже забрали")
             return
 
-        await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
+        await bot.delete_message(
+            CHANNEL_ID,
+            req["channel_msg_id"]
+        )
 
         await bot.send_message(
             GROUP_ID,
-            f"✅ Заявка принята от: @{message.from_user.username or 'user'}"
+            f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> "
+            f"Заявка принята от: @{message.from_user.username or 'user'}"
         )
 
         await message.answer("➕ Вы приняли заявку")
@@ -237,7 +254,8 @@ async def add_request(message: Message):
 
     sent = await bot.send_message(
         CHANNEL_ID,
-        "<b>💼 Срочно нужен номер!</b>\n"
+        "<b><tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
+        "Срочно нужен номер!</b>\n"
         "Кто первый нажмёт, того и заявка",
         reply_markup=request_kb(req["id"])
     )
@@ -270,6 +288,7 @@ async def admin(callback: CallbackQuery):
 async def toggle(callback: CallbackQuery):
 
     await toggle_status()
+
     settings = await get_settings()
 
     await callback.message.edit_reply_markup(

@@ -22,7 +22,6 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 raw_username = os.getenv("BOT_USERNAME")
-
 if not raw_username:
     raise ValueError("BOT_USERNAME is not set")
 
@@ -31,16 +30,14 @@ BOT_USERNAME = raw_username.replace("@", "")
 
 bot = Bot(
     token=TOKEN,
-    default=DefaultBotProperties(
-        parse_mode=ParseMode.HTML
-    )
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
 dp = Dispatcher()
 db: asyncpg.Pool = None
 
 
-# ================= DB INIT =================
+# ================= DB =================
 async def init_db():
     global db
 
@@ -79,7 +76,6 @@ async def init_db():
 
 # ================= USERS =================
 async def ensure_user(user_id: int):
-
     await db.execute("""
         INSERT INTO users (user_id)
         VALUES ($1)
@@ -88,29 +84,19 @@ async def ensure_user(user_id: int):
 
 
 async def get_user(user_id: int):
-
-    return await db.fetchrow("""
-        SELECT * FROM users
-        WHERE user_id = $1
-    """, user_id)
+    return await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
 
 
 # ================= SETTINGS =================
 async def get_settings():
-
-    return await db.fetchrow("""
-        SELECT * FROM settings
-        WHERE id = 1
-    """)
+    return await db.fetchrow("SELECT * FROM settings WHERE id = 1")
 
 
 async def toggle_status():
-
     await db.execute("""
         UPDATE settings
         SET status = CASE
-            WHEN status = 'Стартворк'
-            THEN 'Стопворк'
+            WHEN status = 'Стартворк' THEN 'Стопворк'
             ELSE 'Стартворк'
         END
         WHERE id = 1
@@ -118,7 +104,6 @@ async def toggle_status():
 
 
 async def set_rate(rate: float):
-
     await db.execute("""
         UPDATE settings
         SET rate = $1
@@ -133,93 +118,47 @@ async def profile_text(user_id: int):
     settings = await get_settings()
 
     user = dict(user or {})
-
     user.setdefault("balance", 0)
     user.setdefault("today_earn", 0)
 
     return (
-        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> "
-        "Ваш профиль:\n\n"
-
-        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> "
-        f"ID Аккаунта: <code>{user_id}</code>\n"
-
-        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> "
-        f"Заработано за сегодня: "
-        f"<code>{float(user['today_earn']):.2f}</code> USDT\n"
-
-        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
-        f"Баланс: "
-        f"<code>{float(user['balance']):.2f}</code> USDT\n"
-
-        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> "
-        f"Статус бота: {settings['status']}"
+        "<tg-emoji emoji-id='5275979556308674886'>👤</tg-emoji> Ваш профиль:\n\n"
+        f"<tg-emoji emoji-id='5278602437001767574'>🔓</tg-emoji> ID Аккаунта: <code>{user_id}</code>\n"
+        f"<tg-emoji emoji-id='5278778882848220741'>📊</tg-emoji> Заработано за сегодня: <code>{float(user['today_earn']):.2f}</code> USDT\n"
+        f"<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Баланс: <code>{float(user['balance']):.2f}</code> USDT\n"
+        f"<tg-emoji emoji-id='5276412364458059956'>🕓</tg-emoji> Статус бота: {settings['status']}"
     )
 
 
 # ================= KEYBOARDS =================
 def profile_kb(user_id: int):
-
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text="Вывести",
-                callback_data="withdraw"
-            )
-        ]
+    kb = [
+        [InlineKeyboardButton(text="Вывести", callback_data="withdraw")]
     ]
 
     if user_id == ADMIN_ID:
-        buttons.append([
-            InlineKeyboardButton(
-                text="Настройки",
-                callback_data="admin"
-            )
-        ])
+        kb.append([InlineKeyboardButton(text="Настройки", callback_data="admin")])
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=buttons
-    )
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 def request_kb(req_id: int):
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Сдать номер",
-                    url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
-                )
-            ]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Сдать номер",
+                url=f"https://t.me/{BOT_USERNAME}?start=take_{req_id}"
+            )
         ]
-    )
+    ])
 
 
 def admin_kb(settings):
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"Статус: {settings['status']}",
-                    callback_data="toggle_status"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Ставка: {settings['rate']}",
-                    callback_data="change_rate"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Назад",
-                    callback_data="back"
-                )
-            ]
-        ]
-    )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Статус: {settings['status']}", callback_data="toggle_status")],
+        [InlineKeyboardButton(text=f"Ставка: {settings['rate']}", callback_data="change_rate")],
+        [InlineKeyboardButton(text="Назад", callback_data="back")]
+    ])
 
 
 # ================= START =================
@@ -230,15 +169,11 @@ async def start(message: Message):
 
     args = message.text.split()
 
-    # ===== TAKE REQUEST =====
     if len(args) > 1 and args[1].startswith("take_"):
 
         req_id = int(args[1].split("_")[1])
 
-        req = await db.fetchrow("""
-            SELECT * FROM requests
-            WHERE id = $1
-        """, req_id)
+        req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
         if not req:
             await message.answer("❌ Заявка не найдена")
@@ -252,44 +187,28 @@ async def start(message: Message):
             UPDATE requests
             SET status = 'taken',
                 taken_by = $2
-            WHERE id = $1
-            AND status = 'open'
+            WHERE id = $1 AND status = 'open'
         """, req_id, message.from_user.id)
 
         if updated == "UPDATE 0":
             await message.answer("❌ Уже забрали")
             return
 
-        await bot.delete_message(
-            CHANNEL_ID,
-            req["channel_msg_id"]
-        )
+        await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
 
         await bot.send_message(
             GROUP_ID,
-            f"Принята заявка под номером "
-            f"<code>#{req_id}</code>\n\n"
-
-            f"• Пользователь: "
-            f"@{message.from_user.username or 'user'}\n"
-
+            f"Принята заявка под номером <code>#{req_id}</code>\n\n"
+            f"• Пользователь: @{message.from_user.username or 'user'}\n"
             f"• Формат: <code>CODE</code>",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="Отменить заявку",
-                            callback_data=f"cancel_{req_id}"
-                        )
-                    ]
-                ]
-            )
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отменить заявку", callback_data=f"cancel_{req_id}")]
+            ])
         )
 
         await message.answer("➕ Вы приняли заявку")
         return
 
-    # ===== PROFILE =====
     await message.answer(
         await profile_text(message.from_user.id),
         reply_markup=profile_kb(message.from_user.id)
@@ -311,10 +230,7 @@ async def add_request(message: Message):
 
     sent = await bot.send_message(
         CHANNEL_ID,
-        "<b>"
-        "<tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> "
-        "Срочно нужен номер!"
-        "</b>\n"
+        "<b><tg-emoji emoji-id='5276037216244624892'>💼</tg-emoji> Срочно нужен номер!</b>\n"
         "Кто первый нажмёт, того и заявка",
         reply_markup=request_kb(req["id"])
     )
@@ -332,15 +248,9 @@ async def add_request(message: Message):
 @dp.callback_query(F.data.startswith("cancel_"))
 async def cancel_request(callback: CallbackQuery):
 
-    if callback.from_user.id != ADMIN_ID:
-        return
-
     req_id = int(callback.data.split("_")[1])
 
-    req = await db.fetchrow("""
-        SELECT * FROM requests
-        WHERE id = $1
-    """, req_id)
+    req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
     if not req:
         await callback.answer("Заявка не найдена")
@@ -350,109 +260,32 @@ async def cancel_request(callback: CallbackQuery):
         await callback.answer("Нет исполнителя")
         return
 
-    # ===== статус =====
     await db.execute("""
         UPDATE requests
         SET status = 'cancelled'
         WHERE id = $1
     """, req_id)
 
-    # ===== сообщение пользователю =====
     await bot.send_message(
         req["taken_by"],
         f"<tg-emoji emoji-id='5276384644739129761'>🗑</tg-emoji> "
         f"Заявка <code>#{req_id}</code>\n"
         f"Отменена администратором, дождитесь новой",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Перейти в канал",
-                        url=f"https://t.me/c/{str(CHANNEL_ID).replace('-100', '')}"
-                    )
-                ]
-            ]
-        )
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Перейти в канал",
+                url=f"https://t.me/c/{str(CHANNEL_ID).replace('-100', '')}"
+            )]
+        ])
     )
 
-    # ===== удалить сообщение в группе =====
     await callback.message.delete()
-
     await callback.answer("Заявка отменена")
-
-
-# ================= ADMIN =================
-@dp.callback_query(F.data == "admin")
-async def admin(callback: CallbackQuery):
-
-    if callback.from_user.id != ADMIN_ID:
-        return
-
-    settings = await get_settings()
-
-    await callback.message.edit_text(
-        "🔨 Панель администратора",
-        reply_markup=admin_kb(settings)
-    )
-
-
-@dp.callback_query(F.data == "toggle_status")
-async def toggle(callback: CallbackQuery):
-
-    await toggle_status()
-
-    settings = await get_settings()
-
-    await callback.message.edit_reply_markup(
-        reply_markup=admin_kb(settings)
-    )
-
-
-@dp.callback_query(F.data == "change_rate")
-async def change_rate(callback: CallbackQuery):
-
-    options = [4.00, 4.25, 4.50, 4.75, 5.00]
-
-    settings = await get_settings()
-
-    current = float(settings["rate"])
-
-    idx = options.index(current)
-
-    new_rate = options[(idx + 1) % len(options)]
-
-    await set_rate(new_rate)
-
-    settings = await get_settings()
-
-    await callback.message.edit_reply_markup(
-        reply_markup=admin_kb(settings)
-    )
-
-
-@dp.callback_query(F.data == "back")
-async def back(callback: CallbackQuery):
-
-    await callback.message.delete()
-
-    await callback.message.answer(
-        await profile_text(callback.from_user.id),
-        reply_markup=profile_kb(callback.from_user.id)
-    )
-
-
-# ================= WITHDRAW =================
-@dp.callback_query(F.data == "withdraw")
-async def withdraw(callback: CallbackQuery):
-
-    await callback.answer("Позже")
 
 
 # ================= MAIN =================
 async def main():
-
     await init_db()
-
     await dp.start_polling(bot)
 
 

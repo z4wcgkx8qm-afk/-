@@ -56,6 +56,7 @@ async def init_db():
             number TEXT,
             channel_msg_id BIGINT,
             support_msg_id BIGINT,
+            support_chat_id BIGINT,
             accepted BOOLEAN DEFAULT FALSE,
             slotted BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT NOW()
@@ -67,6 +68,7 @@ async def init_db():
         ("sms_requested", "BOOLEAN DEFAULT FALSE"),
         ("paid_out", "BOOLEAN DEFAULT FALSE"),
         ("support_msg_id", "BIGINT"),
+        ("support_chat_id", "BIGINT"),
     ]:
         try:
             await db.execute(f"ALTER TABLE requests ADD COLUMN IF NOT EXISTS {col} {col_type}")
@@ -99,14 +101,14 @@ async def is_approved_group(group_id: int) -> bool:
 
 
 async def notify_group(req_id: int, text: str, reply_markup=None):
-    req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
-    if not req or not req["support_msg_id"]:
+    req = await db.fetchrow("SELECT support_chat_id, support_msg_id FROM requests WHERE id = $1", req_id)
+    if not req or not req["support_chat_id"] or not req["support_msg_id"]:
         return
     try:
         await bot.send_message(
-            chat_id=req["support_msg_id"] >> 32,  # high 32 bits = chat_id
+            chat_id=req["support_chat_id"],
             text=text,
-            reply_to_message_id=req["support_msg_id"] & 0xFFFFFFFF,  # low 32 bits = message_id
+            reply_to_message_id=req["support_msg_id"],
             reply_markup=reply_markup
         )
     except:
@@ -285,15 +287,13 @@ async def cmd_code(message: types.Message):
         reply_markup=request_keyboard(req_id)
     )
 
-    # support_msg_id = (chat_id << 32) | message_id
-    support_msg_id = (message.chat.id << 32) | message.message_id
+    # Ответ бота в группу — сохраняем его ID для цепочки
+    reply_msg = await message.reply(f"Заявка #{req_id} создана, ожидайте принятия")
 
     await db.execute(
-        "UPDATE requests SET channel_msg_id = $1, support_msg_id = $2 WHERE id = $3",
-        sent.message_id, support_msg_id, req_id
+        "UPDATE requests SET channel_msg_id = $1, support_chat_id = $2, support_msg_id = $3 WHERE id = $4",
+        sent.message_id, reply_msg.chat.id, reply_msg.message_id, req_id
     )
-
-    await message.reply(f"Заявка #{req_id} создана, ожидайте принятия")
 
 
 # ================= TIMEOUT =================

@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from aiogram.types import BufferedInputFile
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -295,6 +296,88 @@ async def cmd_reset(message: types.Message):
     await message.reply(f"Профиль пользователя {user_id} обнулён.")
 
 
+# ================= /state =================
+@dp.message(Command("state"))
+async def cmd_state(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if message.chat.type == "private":
+        return
+
+    if not await is_approved_group(message.chat.id):
+        return
+
+    today = datetime.now().strftime("%d.%m")
+
+    users_count = await db.fetchval("SELECT COUNT(*) FROM users")
+    submitted = await db.fetchval("SELECT COALESCE(SUM(total_submitted), 0) FROM users")
+    paid = await db.fetchval("SELECT COALESCE(SUM(total_paid), 0) FROM users")
+    total_earn = await db.fetchval("SELECT COALESCE(SUM(today_earn), 0) FROM users")
+
+    stood = await db.fetchval("""
+        SELECT COUNT(*) FROM requests
+        WHERE created_at::date = CURRENT_DATE AND status = 'completed' AND accepted = TRUE
+    """)
+    errors = await db.fetchval("""
+        SELECT COUNT(*) FROM requests
+        WHERE created_at::date = CURRENT_DATE AND status = 'cancelled' AND slotted = FALSE AND accepted = FALSE AND taken_by IS NOT NULL
+    """)
+    slips = await db.fetchval("""
+        SELECT COUNT(*) FROM requests
+        WHERE created_at::date = CURRENT_DATE AND slotted = TRUE
+    """)
+
+    text = (
+        f"📊 Статистика за сегодня ({today}):\n"
+        f"👥 Пользователей: {users_count}\n"
+        f"📱 Сдано номеров: {submitted}\n"
+        f"✅ Встало: {stood}\n"
+        f"❌ Ошибок: {errors}\n"
+        f"⏱ Слетов: {slips}\n"
+        f"💰 Выплачено: {total_earn:.2f} USDT"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="txt. отчет", callback_data="state_report"))
+    
+    await message.reply(text, reply_markup=builder.as_markup())
+
+
+@dp.callback_query(F.data == "state_report")
+async def state_report(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    rows = await db.fetch("""
+        SELECT u.user_id, r.number
+        FROM requests r
+        JOIN users u ON u.user_id = r.taken_by
+        WHERE r.created_at::date = CURRENT_DATE AND r.status = 'completed' AND r.accepted = TRUE AND r.paid_out = TRUE
+    """)
+
+    lines = []
+    for row in rows:
+        try:
+            chat = await bot.get_chat(row["user_id"])
+            username = f"@{chat.username}" if chat.username else f"ID:{row['user_id']}"
+        except:
+            username = f"ID:{row['user_id']}"
+        lines.append(f"{username} — {row['number']} — 4.20$")
+
+    if not lines:
+        await callback.answer("Нет данных за сегодня", show_alert=True)
+        return
+
+    report = "\n".join(lines)
+    
+    file = BufferedInputFile(report.encode("utf-8"), filename=f"report_{datetime.now().strftime('%d%m')}.txt")
+    
+    await callback.message.reply_document(file)
+    await callback.answer()
+
+
 # ================= /code =================
 @dp.message(Command("code"))
 async def cmd_code(message: types.Message):
@@ -474,7 +557,6 @@ async def accept_number(callback: types.CallbackQuery):
 
     await db.execute("UPDATE requests SET accepted = TRUE, slotted = FALSE, status = 'completed' WHERE id = $1", req_id)
 
-    # Обновляем клавиатуру — кнопка "Встал ✅"
     await callback.message.edit_reply_markup(reply_markup=service_keyboard(req_id, accepted=True))
 
     try:

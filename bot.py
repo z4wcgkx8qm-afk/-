@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.utils.formatting import CustomEmoji, as_list, Text
+from aiogram.utils.formatting import CustomEmoji, as_list
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 NEWS_CHANNEL_URL = os.getenv("NEWS_CHANNEL_URL")
@@ -37,9 +37,9 @@ async def menu_handler(message: types.Message):
     user_id = message.from_user.id
     
     content = as_list(
-        CustomEmoji("6237594537422758462"),
-        CustomEmoji("6237595413596087393"),
-        CustomEmoji("6237880921547086417"),
+        CustomEmoji(custom_emoji_id="6237594537422758462"),
+        CustomEmoji(custom_emoji_id="6237595413596087393"),
+        CustomEmoji(custom_emoji_id="6237880921547086417"),
         " | Личный кабинет\n",
         "\n",
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n",

@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 from aiogram import Bot, Dispatcher, types
@@ -38,8 +37,8 @@ async def menu_handler(message: types.Message):
     user_id = message.from_user.id
     
     text = (
-        '<tg-emoji emoji-id="6237594537422758462">🎨</tg-emoji>'
-        '<tg-emoji emoji-id="6237595413596087393">🎨</tg-emoji>'
+        '<tg-emoji emoji-id="6237594537422758462">🎨</tg-emoji>&#8203;'
+        '<tg-emoji emoji-id="6237595413596087393">🎨</tg-emoji>&#8203;'
         '<tg-emoji emoji-id="6237880921547086417">🎨</tg-emoji>'
         f' | Личный кабинет\n'
         f'\n'

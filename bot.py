@@ -3,6 +3,7 @@ import asyncio
 import asyncpg
 import re
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -19,6 +20,8 @@ NEWS_CHANNEL_URL = os.getenv("NEWS_CHANNEL_URL", "")
 AGREEMENT_URL = os.getenv("AGREEMENT_URL", "")
 DATABASE_URL = os.getenv("DATABASE_URL")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "maxuprobot").replace("@", "")
+
+MSK = ZoneInfo("Europe/Moscow")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -81,9 +84,9 @@ async def init_db():
         WHERE status = 'completed' AND accepted = TRUE AND slotted = FALSE AND paid_out = FALSE
     """)
 
-    now = datetime.now()
+    now = datetime.now(MSK)
     for req in pending:
-        payout_time = req["created_at"] + timedelta(minutes=5)
+        payout_time = req["created_at"].replace(tzinfo=ZoneInfo("UTC")).astimezone(MSK) + timedelta(minutes=5)
         delay = (payout_time - now).total_seconds()
         if delay > 0:
             asyncio.create_task(hold_payout(req["id"], req["taken_by"], delay))
@@ -308,30 +311,33 @@ async def cmd_state(message: types.Message):
     if not await is_approved_group(message.chat.id):
         return
 
-    today = datetime.now().strftime("%d.%m")
+    msk_now = datetime.now(MSK)
+    today_str = msk_now.strftime("%d.%m")
 
     users_count = await db.fetchval("SELECT COUNT(*) FROM users")
-    submitted = await db.fetchval("SELECT COALESCE(SUM(total_submitted), 0) FROM users")
-    paid = await db.fetchval("SELECT COALESCE(SUM(total_paid), 0) FROM users")
-    total_earn = await db.fetchval("SELECT COALESCE(SUM(today_earn), 0) FROM users")
 
     stood = await db.fetchval("""
         SELECT COUNT(*) FROM requests
-        WHERE created_at::date = CURRENT_DATE AND status = 'completed' AND accepted = TRUE
-    """)
+        WHERE (created_at AT TIME ZONE 'Europe/Moscow')::date = $1
+        AND status = 'completed' AND accepted = TRUE
+    """, msk_now.date())
     errors = await db.fetchval("""
         SELECT COUNT(*) FROM requests
-        WHERE created_at::date = CURRENT_DATE AND status = 'cancelled' AND slotted = FALSE AND accepted = FALSE AND taken_by IS NOT NULL
-    """)
+        WHERE (created_at AT TIME ZONE 'Europe/Moscow')::date = $1
+        AND status = 'cancelled' AND slotted = FALSE AND accepted = FALSE AND taken_by IS NOT NULL
+    """, msk_now.date())
     slips = await db.fetchval("""
         SELECT COUNT(*) FROM requests
-        WHERE created_at::date = CURRENT_DATE AND slotted = TRUE
+        WHERE (created_at AT TIME ZONE 'Europe/Moscow')::date = $1
+        AND slotted = TRUE
+    """, msk_now.date())
+    total_earn = await db.fetchval("""
+        SELECT COALESCE(SUM(today_earn), 0) FROM users
     """)
 
     text = (
-        f"📊 Статистика за сегодня ({today}):\n"
+        f"📊 Статистика за сегодня ({today_str}):\n"
         f"👥 Пользователей: {users_count}\n"
-        f"📱 Сдано номеров: {submitted}\n"
         f"✅ Встало: {stood}\n"
         f"❌ Ошибок: {errors}\n"
         f"⏱ Слетов: {slips}\n"
@@ -340,7 +346,7 @@ async def cmd_state(message: types.Message):
 
     builder = InlineKeyboardBuilder()
     builder.add(types.InlineKeyboardButton(text="txt. отчет", callback_data="state_report"))
-    
+
     await message.reply(text, reply_markup=builder.as_markup())
 
 
@@ -350,30 +356,45 @@ async def state_report(callback: types.CallbackQuery):
         await callback.answer("Нет доступа", show_alert=True)
         return
 
+    msk_now = datetime.now(MSK)
+
     rows = await db.fetch("""
         SELECT u.user_id, r.number
         FROM requests r
         JOIN users u ON u.user_id = r.taken_by
-        WHERE r.created_at::date = CURRENT_DATE AND r.status = 'completed' AND r.accepted = TRUE AND r.paid_out = TRUE
-    """)
+        WHERE (r.created_at AT TIME ZONE 'Europe/Moscow')::date = $1
+        AND r.status = 'completed' AND r.accepted = TRUE AND r.paid_out = TRUE
+        ORDER BY u.user_id
+    """, msk_now.date())
 
-    lines = []
-    for row in rows:
-        try:
-            chat = await bot.get_chat(row["user_id"])
-            username = f"@{chat.username}" if chat.username else f"ID:{row['user_id']}"
-        except:
-            username = f"ID:{row['user_id']}"
-        lines.append(f"{username} — {row['number']} — 4.20$")
-
-    if not lines:
+    if not rows:
         await callback.answer("Нет данных за сегодня", show_alert=True)
         return
 
+    # Группировка по юзерам
+    grouped = {}
+    for row in rows:
+        uid = row["user_id"]
+        if uid not in grouped:
+            try:
+                chat = await bot.get_chat(uid)
+                name = f"@{chat.username}" if chat.username else f"ID:{uid}"
+            except:
+                name = f"ID:{uid}"
+            grouped[uid] = {"name": name, "numbers": []}
+        grouped[uid]["numbers"].append(row["number"])
+
+    lines = []
+    for uid, data in grouped.items():
+        lines.append(data["name"])
+        for num in data["numbers"]:
+            lines.append(f"  {num} — 4.20$")
+        lines.append("")
+
     report = "\n".join(lines)
-    
-    file = BufferedInputFile(report.encode("utf-8"), filename=f"report_{datetime.now().strftime('%d%m')}.txt")
-    
+
+    file = BufferedInputFile(report.encode("utf-8"), filename=f"report_{msk_now.strftime('%d%m')}.txt")
+
     await callback.message.reply_document(file)
     await callback.answer()
 

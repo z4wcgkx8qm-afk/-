@@ -4,24 +4,16 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from aiogram.utils.formatting import CustomEmoji, as_list, Text
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 NEWS_CHANNEL_URL = os.getenv("NEWS_CHANNEL_URL")
 PRIEMKA_CHANNEL_URL = os.getenv("PRIEMKA_CHANNEL_URL")
 
-EMOJI_1 = "6237594537422758462"
-EMOJI_2 = "6237595413596087393"
-EMOJI_3 = "6237880921547086417"
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 def get_main_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="Меню"))
-    return builder.as_markup(resize_keyboard=True)
-
-def get_menu_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="Меню"))
     return builder.as_markup(resize_keyboard=True)
@@ -44,29 +36,30 @@ async def cmd_start(message: types.Message):
 async def menu_handler(message: types.Message):
     user_id = message.from_user.id
     
-    text = (
-        f'<tg-emoji emoji-id="{EMOJI_1}">🎨</tg-emoji>'
-        f'<tg-emoji emoji-id="{EMOJI_2}">🎨</tg-emoji>'
-        f'<tg-emoji emoji-id="{EMOJI_3}">🎨</tg-emoji>'
-        f' | Личный кабинет\n'
-        f'\n'
-        f'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n'
-        f'\n'
-        f'👤 ID: {user_id}\n'
-        f'💳 Баланс: 0.00 USDT\n'
-        f'\n'
-        f'📊 Ваша статистика:\n'
-        f'💰 Заработано сегодня: 0.00 USDT\n'
-        f'📱 Всего сдано номеров: 0\n'
-        f'✅ Всего оплачено: 0\n'
-        f'📈 Конверсия успеха: 0%\n'
-        f'\n'
-        f'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n'
-        f'\n'
-        f'Выберите действие ниже:'
+    content = as_list(
+        CustomEmoji("6237594537422758462"),
+        CustomEmoji("6237595413596087393"),
+        CustomEmoji("6237880921547086417"),
+        " | Личный кабинет\n",
+        "\n",
+        "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n",
+        "\n",
+        f"👤 ID: {user_id}\n",
+        "💳 Баланс: 0.00 USDT\n",
+        "\n",
+        "📊 Ваша статистика:\n",
+        "💰 Заработано сегодня: 0.00 USDT\n",
+        "📱 Всего сдано номеров: 0\n",
+        "✅ Всего оплачено: 0\n",
+        "📈 Конверсия успеха: 0%\n",
+        "\n",
+        "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n",
+        "\n",
+        "Выберите действие ниже:"
     )
     
-    await message.answer(text, reply_markup=get_withdraw_inline_keyboard(), parse_mode=ParseMode.HTML)
+    rendered = content.render()
+    await message.answer(**rendered.as_kwargs(), reply_markup=get_withdraw_inline_keyboard())
 
 @dp.callback_query(lambda c: c.data == "withdraw")
 async def withdraw_stub(callback: types.CallbackQuery):

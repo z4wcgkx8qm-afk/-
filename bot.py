@@ -16,6 +16,12 @@ def get_main_keyboard():
     builder.add(types.KeyboardButton(text="Меню"))
     return builder.as_markup(resize_keyboard=True)
 
+def get_menu_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="Вывод"))
+    builder.add(types.KeyboardButton(text="Меню"))
+    return builder.as_markup(resize_keyboard=True)
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     welcome_text = (
@@ -26,8 +32,42 @@ async def cmd_start(message: types.Message):
     await message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode="HTML")
 
 @dp.message(lambda msg: msg.text == "Меню")
-async def menu_stub(message: types.Message):
-    await message.answer("Меню в разработке")
+async def menu_handler(message: types.Message):
+    user_id = message.from_user.id
+    
+    text = (
+        f'<tg-emoji emoji-id="6237594537422758462">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237595413596087393">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237880921547086417">🎨</tg-emoji>'
+        f' <tg-emoji emoji-id="6237594537422758462">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237595413596087393">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237880921547086417">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237594537422758462">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237595413596087393">🎨</tg-emoji>'
+        f'<tg-emoji emoji-id="6237880921547086417">🎨</tg-emoji>'
+        f' | Личный кабинет\n'
+        f'\n'
+        f'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n'
+        f'\n'
+        f'👤 ID: {user_id}\n'
+        f'💳 Баланс: 0.00 USDT\n'
+        f'\n'
+        f'📊 Ваша статистика:\n'
+        f'💰 Заработано сегодня: 0.00 USDT\n'
+        f'📱 Всего сдано номеров: 0\n'
+        f'✅ Всего оплачено: 0\n'
+        f'📈 Конверсия успеха: 0%\n'
+        f'\n'
+        f'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n'
+        f'\n'
+        f'Выберите действие ниже:'
+    )
+    
+    await message.answer(text, reply_markup=get_menu_keyboard(), parse_mode="HTML")
+
+@dp.message(lambda msg: msg.text == "Вывод")
+async def withdraw_stub(message: types.Message):
+    await message.answer("Вывод в разработке")
 
 async def main():
     await dp.start_polling(bot)

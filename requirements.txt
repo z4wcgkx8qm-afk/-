@@ -1,4 +1,1 @@
-aiogram
-asyncpg
-apscheduler
-pytz
+

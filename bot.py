@@ -165,7 +165,7 @@ def service_keyboard(req_id: int, accepted: bool = False):
 
 
 # ================= /start =================
-@dp.message(Command("start"))
+@dp.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: types.Message):
     await ensure_user(message.from_user.id)
 
@@ -216,7 +216,7 @@ async def cmd_start(message: types.Message):
 
 
 # ================= МЕНЮ =================
-@dp.message(F.text == "Меню")
+@dp.message(F.text == "Меню", F.chat.type == "private")
 async def menu_handler(message: types.Message):
     await ensure_user(message.from_user.id)
     user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
@@ -371,7 +371,6 @@ async def state_report(callback: types.CallbackQuery):
         await callback.answer("Нет данных за сегодня", show_alert=True)
         return
 
-    # Группировка по юзерам
     grouped = {}
     for row in rows:
         uid = row["user_id"]

@@ -149,9 +149,12 @@ def sms_request_keyboard(req_id: int):
     return builder.as_markup()
 
 
-def service_keyboard(req_id: int):
+def service_keyboard(req_id: int, accepted: bool = False):
     builder = InlineKeyboardBuilder()
-    builder.add(types.InlineKeyboardButton(text="Встал", callback_data=f"accept_{req_id}"))
+    if accepted:
+        builder.add(types.InlineKeyboardButton(text="Встал ✅", callback_data="already_accepted"))
+    else:
+        builder.add(types.InlineKeyboardButton(text="Встал", callback_data=f"accept_{req_id}"))
     builder.add(types.InlineKeyboardButton(text="Ошибка", callback_data=f"error_{req_id}"))
     builder.add(types.InlineKeyboardButton(text="Слет", callback_data=f"slip_{req_id}"))
     return builder.as_markup()
@@ -377,7 +380,6 @@ async def handle_message(message: types.Message):
     req_id = user["active_code_request"]
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
-    # Этап 1: номер телефона
     if req["status"] == "taken" and not req["sms_requested"]:
         text = message.text.strip()
 
@@ -399,7 +401,6 @@ async def handle_message(message: types.Message):
         await notify_group(req_id, f"Номер — <code>{text}</code>", sms_request_keyboard(req_id))
         return
 
-    # Этап 2: СМС-код
     if req["status"] == "number_submitted" and req["sms_requested"]:
         sms = message.text.strip()
 
@@ -447,6 +448,12 @@ async def request_sms(callback: types.CallbackQuery):
     )
 
 
+# ================= ALREADY ACCEPTED =================
+@dp.callback_query(F.data == "already_accepted")
+async def already_accepted(callback: types.CallbackQuery):
+    await callback.answer("Номер уже встал", show_alert=True)
+
+
 # ================= SERVICE BUTTONS =================
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_number(callback: types.CallbackQuery):
@@ -461,7 +468,14 @@ async def accept_number(callback: types.CallbackQuery):
         await callback.answer("Выплата уже произведена", show_alert=True)
         return
 
+    if req["accepted"]:
+        await callback.answer("Номер уже встал", show_alert=True)
+        return
+
     await db.execute("UPDATE requests SET accepted = TRUE, slotted = FALSE, status = 'completed' WHERE id = $1", req_id)
+
+    # Обновляем клавиатуру — кнопка "Встал ✅"
+    await callback.message.edit_reply_markup(reply_markup=service_keyboard(req_id, accepted=True))
 
     try:
         await bot.send_message(

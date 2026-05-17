@@ -75,6 +75,7 @@ async def init_db():
         except:
             pass
 
+    # Восстановление холдов
     pending = await db.fetch("""
         SELECT id, taken_by, created_at FROM requests
         WHERE status = 'completed' AND accepted = TRUE AND slotted = FALSE AND paid_out = FALSE
@@ -227,14 +228,14 @@ async def menu_handler(message: types.Message):
         f"\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"\n"
-        f"ID: {user_id}\n"
-        f"Баланс: {user['balance']:.2f} USDT\n"
+        f"👤 ID: {user_id}\n"
+        f"💳 Баланс: {user['balance']:.2f} USDT\n"
         f"\n"
-        f"Ваша статистика:\n"
-        f"Заработано сегодня: {user['today_earn']:.2f} USDT\n"
-        f"Всего сдано номеров: {submitted}\n"
-        f"Всего оплачено: {paid}\n"
-        f"Конверсия успеха: {conversion}%\n"
+        f"📊 Ваша статистика:\n"
+        f"💰 Заработано сегодня: {user['today_earn']:.2f} USDT\n"
+        f"📱 Всего сдано номеров: {submitted}\n"
+        f"✅ Всего оплачено: {paid}\n"
+        f"📈 Конверсия успеха: {conversion}%\n"
         f"\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"\n"
@@ -267,6 +268,31 @@ async def cmd_setup(message: types.Message):
     await message.answer(f"Группа {group_id} одобрена")
 
 
+# ================= /reset =================
+@dp.message(Command("reset"))
+async def cmd_reset(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.reply("Использование: /reset user_id")
+        return
+
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        await message.reply("Неверный user_id")
+        return
+
+    await db.execute("""
+        UPDATE users SET balance = 0, today_earn = 0, total_submitted = 0, total_paid = 0, active_code_request = NULL
+        WHERE user_id = $1
+    """, user_id)
+
+    await message.reply(f"Профиль пользователя {user_id} обнулён.")
+
+
 # ================= /code =================
 @dp.message(Command("code"))
 async def cmd_code(message: types.Message):
@@ -287,7 +313,6 @@ async def cmd_code(message: types.Message):
         reply_markup=request_keyboard(req_id)
     )
 
-    # Ответ бота в группу — сохраняем его ID для цепочки
     reply_msg = await message.reply(f"Заявка #{req_id} создана, ожидайте принятия")
 
     await db.execute(
@@ -353,7 +378,6 @@ async def handle_message(message: types.Message):
     req_id = user["active_code_request"]
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
-    # Этап 1: номер телефона
     if req["status"] == "taken" and not req["sms_requested"]:
         number = message.text.strip()
 
@@ -367,7 +391,6 @@ async def handle_message(message: types.Message):
         await notify_group(req_id, f"Номер — <code>{number}</code>", sms_request_keyboard(req_id))
         return
 
-    # Этап 2: СМС-код
     if req["status"] == "number_submitted" and req["sms_requested"]:
         sms = message.text.strip()
 
@@ -455,6 +478,13 @@ async def process_payout(req_id: int, user_id: int):
                 active_code_request = NULL
                 WHERE user_id = $1
             """, user_id)
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"На ваш баланс успешно зачислено 4.20 USDT, спасибо за работу!"
+                )
+            except:
+                pass
 
 
 @dp.callback_query(F.data.startswith("error_"))

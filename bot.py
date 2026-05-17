@@ -2,22 +2,14 @@ import os
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 NEWS_CHANNEL_URL = os.getenv("NEWS_CHANNEL_URL")
 PRIEMKA_CHANNEL_URL = os.getenv("PRIEMKA_CHANNEL_URL")
 
-EMOJI_1 = "6237594537422758462"
-EMOJI_2 = "6237595413596087393"
-EMOJI_3 = "6237880921547086417"
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
-def build_premium_emoji(emoji_id, fallback):
-    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 def get_main_keyboard():
     builder = ReplyKeyboardBuilder()
@@ -36,20 +28,15 @@ async def cmd_start(message: types.Message):
         f'<a href="{NEWS_CHANNEL_URL}">Новостной канал</a>\n'
         f'<a href="{PRIEMKA_CHANNEL_URL}">Канал приёмка</a>'
     )
-    await message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode="HTML")
 
 @dp.message(lambda msg: msg.text == "Меню")
 async def menu_handler(message: types.Message):
     user_id = message.from_user.id
     
-    emoji_line = (
-        build_premium_emoji(EMOJI_1, "🎨") +
-        build_premium_emoji(EMOJI_2, "🎨") +
-        build_premium_emoji(EMOJI_3, "🎨")
-    )
-    
     text = (
-        f'{emoji_line} | Личный кабинет\n'
+        '<tg-emoji emoji-id="5278578973595427038">🚫</tg-emoji>'
+        f' | Личный кабинет\n'
         f'\n'
         f'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n'
         f'\n'
@@ -67,7 +54,7 @@ async def menu_handler(message: types.Message):
         f'Выберите действие ниже:'
     )
     
-    await message.answer(text, reply_markup=get_withdraw_inline_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=get_withdraw_inline_keyboard(), parse_mode="HTML")
 
 @dp.callback_query(lambda c: c.data == "withdraw")
 async def withdraw_stub(callback: types.CallbackQuery):

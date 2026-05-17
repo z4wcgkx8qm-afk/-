@@ -54,16 +54,24 @@ async def init_db():
             status TEXT DEFAULT 'open',
             taken_by BIGINT,
             number TEXT,
-            sms_code TEXT,
             channel_msg_id BIGINT,
             group_msg_id BIGINT,
             accepted BOOLEAN DEFAULT FALSE,
             slotted BOOLEAN DEFAULT FALSE,
-            paid_out BOOLEAN DEFAULT FALSE,
-            sms_requested BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
+
+    # Добавление новых колонок
+    for col, col_type in [
+        ("sms_code", "TEXT"),
+        ("sms_requested", "BOOLEAN DEFAULT FALSE"),
+        ("paid_out", "BOOLEAN DEFAULT FALSE"),
+    ]:
+        try:
+            await db.execute(f"ALTER TABLE requests ADD COLUMN IF NOT EXISTS {col} {col_type}")
+        except:
+            pass
 
     # Восстановление холдов после перезапуска
     pending = await db.fetch("""
@@ -142,7 +150,6 @@ async def cmd_start(message: types.Message):
 
     args = message.text.split()
 
-    # Диплинк с заявкой
     if len(args) > 1 and args[1].startswith("take_"):
         try:
             req_id = int(args[1].split("_")[1])
@@ -161,19 +168,16 @@ async def cmd_start(message: types.Message):
             await message.answer("Упс.. данная заявка уже была принята другим пользователем, попробуйте снова!")
             return
 
-        # Берём заявку
         await db.execute("""
             UPDATE requests SET status = 'taken', taken_by = $1 WHERE id = $2
         """, message.from_user.id, req_id)
         await db.execute("UPDATE users SET active_code_request = $1 WHERE user_id = $2", req_id, message.from_user.id)
 
-        # Удаляем сообщение в канале
         try:
             await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
         except:
             pass
 
-        # Саппорту в группу
         for group in await db.fetch("SELECT group_id FROM groups WHERE approved = TRUE"):
             try:
                 await bot.send_message(
@@ -184,17 +188,14 @@ async def cmd_start(message: types.Message):
             except:
                 pass
 
-        # Пользователю
         await message.answer(
             f"Укажите номер РФ (+7XXXXXXXXXX), который будет привязан к заявке #{req_id}. Таймер — 3 минуты.",
             reply_markup=cancel_keyboard(req_id)
         )
 
-        # Таймер 3 минуты
         asyncio.create_task(timeout_request(req_id, message.from_user.id))
         return
 
-    # Обычный старт
     welcome_text = (
         f"Добро пожаловать в MaxUP!\n\n"
         f"<a href='{NEWS_CHANNEL_URL}'>Новостной канал</a>\n"
@@ -305,13 +306,13 @@ async def timeout_request(req_id: int, user_id: int):
     await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", user_id)
 
     try:
-        await bot.send_message(user_id, f"Время вышло, заявка #{req_id} аннулирована. Не успев ввести номер вовремя, вы можете попробовать взять новую заявку.")
+        await bot.send_message(user_id, f"Время вышло, заявка #{req_id} аннулирована.")
     except:
         pass
 
     for group in await db.fetch("SELECT group_id FROM groups WHERE approved = TRUE"):
         try:
-            await bot.send_message(group["group_id"], f"Заявка #{req_id} отменена по таймауту — пользователь не отправил номер в течение 3 минут.")
+            await bot.send_message(group["group_id"], f"Заявка #{req_id} отменена по таймауту.")
         except:
             pass
 
@@ -331,7 +332,7 @@ async def cancel_request(callback: types.CallbackQuery):
 
     if callback.message.chat.type in ("group", "supergroup"):
         try:
-            await bot.send_message(req["taken_by"], "Ваша заявка была отклонена администрацией. Пожалуйста, ожидайте новую заявку.")
+            await bot.send_message(req["taken_by"], "Ваша заявка была отклонена администрацией.")
         except:
             pass
         await callback.message.edit_text(f"Заявка #{req_id} отменена администратором.", reply_markup=None)
@@ -346,7 +347,7 @@ async def cancel_request(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ================= USER INPUT NUMBER =================
+# ================= USER INPUT =================
 @dp.message(F.text, F.chat.type == "private")
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
@@ -358,7 +359,7 @@ async def handle_message(message: types.Message):
     req_id = user["active_code_request"]
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
-    # Этап 1: ждём номер телефона
+    # Этап 1: номер телефона
     if req["status"] == "taken" and not req["sms_requested"]:
         number = message.text.strip()
 
@@ -366,8 +367,7 @@ async def handle_message(message: types.Message):
 
         await message.answer(
             f"Номер <code>{number}</code> принят в обработку!\n"
-            f"Ожидайте поступления смс (не более 2-х минут).\n"
-            f"Если код не придёт, заявка будет отменена автоматически."
+            f"Ожидайте поступления смс (не более 2-х минут)."
         )
 
         for group in await db.fetch("SELECT group_id FROM groups WHERE approved = TRUE"):
@@ -381,7 +381,7 @@ async def handle_message(message: types.Message):
                 pass
         return
 
-    # Этап 2: ждём СМС-код (6 цифр)
+    # Этап 2: СМС-код
     if req["status"] == "number_submitted" and req["sms_requested"]:
         sms = message.text.strip()
 
@@ -452,7 +452,7 @@ async def accept_number(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"Номер {req['number']} принят в работу! По истечению холда (5 минут) средства будут автоматически зачислены на ваш баланс."
+            f"Номер {req['number']} принят в работу! По истечению холда (5 минут) средства будут зачислены на ваш баланс."
         )
     except:
         pass
@@ -470,7 +470,6 @@ async def hold_payout(req_id: int, user_id: int, delay: float = 300):
 async def process_payout(req_id: int, user_id: int):
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
     if req and req["accepted"] and not req["slotted"] and req["status"] == "completed" and not req["paid_out"]:
-        # Строгая проверка + атомарное обновление
         updated = await db.execute("""
             UPDATE requests SET paid_out = TRUE WHERE id = $1 AND paid_out = FALSE
         """, req_id)
@@ -499,7 +498,7 @@ async def error_number(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"Номер {req['number']} не встал, произошла непредвиденная ошибка. Повторите попытку позже или дождитесь новой заявки."
+            f"Номер {req['number']} не встал, произошла непредвиденная ошибка. Повторите попытку позже."
         )
     except:
         pass
@@ -523,7 +522,7 @@ async def slip_number(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"Номер {req['number']} внезапно слетел. Ожидайте новую заявку, мы сообщим!"
+            f"Номер {req['number']} внезапно слетел. Ожидайте новую заявку!"
         )
     except:
         pass

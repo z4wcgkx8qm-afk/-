@@ -28,7 +28,7 @@ async def cmd_start(message: types.Message):
     welcome_text = (
         f"👋 Добро пожаловать в MaxUP!\n\n"
         f"<a href='{NEWS_CHANNEL_URL}'>Новостной канал</a>\n"
-        f"<a href='{PRIEMKA_CHANNEL_URL}'>Канал приёмка</a>"
+        f"<a href='{PRIEMKA_CHANNEL_URL}'>Пользовательское соглашение</a>"
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
 

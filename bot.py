@@ -378,21 +378,35 @@ async def handle_message(message: types.Message):
     req_id = user["active_code_request"]
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
+    # Этап 1: номер телефона
     if req["status"] == "taken" and not req["sms_requested"]:
-        number = message.text.strip()
+        text = message.text.strip()
 
-        await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", number, req_id)
+        if text == "Меню":
+            await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+            return
+
+        if not re.fullmatch(r"(\+7|8|9)\d{9}", text):
+            await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXXX.")
+            return
+
+        await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
 
         await message.answer(
-            f"Номер <code>{number}</code> принят в обработку!\n"
+            f"Номер <code>{text}</code> принят в обработку!\n"
             f"Ожидайте поступления смс (не более 2-х минут)."
         )
 
-        await notify_group(req_id, f"Номер — <code>{number}</code>", sms_request_keyboard(req_id))
+        await notify_group(req_id, f"Номер — <code>{text}</code>", sms_request_keyboard(req_id))
         return
 
+    # Этап 2: СМС-код
     if req["status"] == "number_submitted" and req["sms_requested"]:
         sms = message.text.strip()
+
+        if sms == "Меню":
+            await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+            return
 
         if not re.fullmatch(r"\d{6}", sms):
             await message.answer("Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")

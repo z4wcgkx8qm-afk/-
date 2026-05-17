@@ -35,9 +35,7 @@ async def menu_handler(message: types.Message):
     user_id = message.from_user.id
     
     text = (
-        '<tg-emoji emoji-id="6237594537422758462">🎨</tg-emoji>'
-        '<tg-emoji emoji-id="6237595413596087393">🎨</tg-emoji>'
-        '<tg-emoji emoji-id="6237880921547086417">🎨</tg-emoji>'
+        '<tg-emoji emoji-id="5278611606756942667">❤️</tg-emoji>'
         f' | Личный кабинет\n'
         f'\n'
         f'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n'

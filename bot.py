@@ -75,7 +75,6 @@ async def init_db():
         except:
             pass
 
-    # Восстановление холдов
     pending = await db.fetch("""
         SELECT id, taken_by, created_at FROM requests
         WHERE status = 'completed' AND accepted = TRUE AND slotted = FALSE AND paid_out = FALSE
@@ -386,7 +385,7 @@ async def handle_message(message: types.Message):
             await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
             return
 
-        if not re.fullmatch(r"(\+7|8|9)\d{9}", text):
+        if not re.fullmatch(r"(\+7|8|9)\d{10}", text):
             await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXXX.")
             return
 

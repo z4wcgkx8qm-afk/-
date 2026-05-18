@@ -12,7 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import BufferedInputFile
 
-from cryptobot_python import CryptoBotClient
+from cryptobot import CryptoBotClient
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")

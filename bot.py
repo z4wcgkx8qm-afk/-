@@ -114,7 +114,9 @@ async def crypto_request(method: str, params: dict = None) -> dict:
     headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
     url = f"{CRYPTO_API}/{method}"
     resp = await http_client.post(url, headers=headers, json=params or {})
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        print(f"Crypto API error {resp.status_code}: {resp.text}")
+        raise Exception(resp.json().get("error", resp.text))
     data = resp.json()
     if not data.get("ok"):
         raise Exception(data.get("error", "Unknown error"))
@@ -133,7 +135,7 @@ async def crypto_transfer(amount: float, user_id: int, spend_id: str) -> dict:
     return await crypto_request("transfer", {
         "asset": "USDT",
         "amount": str(amount),
-        "user_id": str(user_id),
+        "user_id": user_id,
         "spend_id": spend_id
     })
 

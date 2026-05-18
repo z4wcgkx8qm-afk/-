@@ -318,6 +318,12 @@ async def menu_handler(message: types.Message):
 # ================= WITHDRAW =================
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery):
+    user = await db.fetchrow("SELECT balance FROM users WHERE user_id = $1", callback.from_user.id)
+
+    if user["balance"] <= 0:
+        await callback.answer("Ваш баланс пуст", show_alert=True)
+        return
+
     await callback.message.answer(
         "Укажите сумму для вывода в USDT.\n"
         "Средства поступят на ваш кошелёк моментально после создания чека."
@@ -327,8 +333,8 @@ async def withdraw_start(callback: types.CallbackQuery):
 
 @dp.message(F.text, F.chat.type == "private")
 async def handle_withdraw_amount(message: types.Message):
-    # Проверяем, не в процессе ли ввода номера/смс
     user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
+
     if user["active_code_request"] is not None or user["active_qr_request"] is not None:
         await handle_message(message)
         return
@@ -346,7 +352,6 @@ async def handle_withdraw_amount(message: types.Message):
         await message.answer("Недостаточно средств на балансе.")
         return
 
-    # Создаём чек через CryptoBot
     try:
         check = await crypto.create_check(
             asset="USDT",
@@ -355,7 +360,6 @@ async def handle_withdraw_amount(message: types.Message):
         )
         check_id = check.check_id
 
-        # Списываем с баланса
         await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
 
         await message.answer(

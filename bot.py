@@ -237,14 +237,20 @@ def sms_request_keyboard(req_id: int):
     return builder.as_markup()
 
 
-def service_keyboard(req_id: int, accepted: bool = False):
+def service_keyboard(req_id: int, accepted: bool = False, error_pressed: bool = False, slip_pressed: bool = False):
     builder = InlineKeyboardBuilder()
     if accepted:
         builder.add(types.InlineKeyboardButton(text="Встал ✅", callback_data="already_accepted"))
     else:
         builder.add(types.InlineKeyboardButton(text="Встал", callback_data=f"accept_{req_id}"))
-    builder.add(types.InlineKeyboardButton(text="Ошибка", callback_data=f"error_{req_id}"))
-    builder.add(types.InlineKeyboardButton(text="Слет", callback_data=f"slip_{req_id}"))
+    builder.add(types.InlineKeyboardButton(
+        text="Ошибка ✅" if error_pressed else "Ошибка",
+        callback_data=f"error_{req_id}"
+    ))
+    builder.add(types.InlineKeyboardButton(
+        text="Слет ✅" if slip_pressed else "Слет",
+        callback_data=f"slip_{req_id}"
+    ))
     return builder.as_markup()
 
 
@@ -875,7 +881,10 @@ async def accept_number(callback: types.CallbackQuery):
 
     await db.execute("UPDATE requests SET accepted = TRUE, slotted = FALSE, status = 'completed' WHERE id = $1", req_id)
 
-    await callback.message.edit_reply_markup(reply_markup=service_keyboard(req_id, accepted=True))
+    # Обновляем клавиатуру: Встал ✅, Ошибка/Слет без ✅
+    await callback.message.edit_reply_markup(
+        reply_markup=service_keyboard(req_id, accepted=True, error_pressed=False, slip_pressed=False)
+    )
 
     try:
         await bot.send_message(
@@ -933,6 +942,11 @@ async def error_number(callback: types.CallbackQuery):
     else:
         await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
 
+    # Обновляем клавиатуру: Ошибка ✅
+    await callback.message.edit_reply_markup(
+        reply_markup=service_keyboard(req_id, accepted=req["accepted"], error_pressed=True, slip_pressed=req["slotted"])
+    )
+
     try:
         await bot.send_message(
             req["taken_by"],
@@ -961,6 +975,11 @@ async def slip_number(callback: types.CallbackQuery):
         await db.execute("UPDATE users SET active_qr_request = NULL WHERE user_id = $1", req["taken_by"])
     else:
         await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
+
+    # Обновляем клавиатуру: Слет ✅
+    await callback.message.edit_reply_markup(
+        reply_markup=service_keyboard(req_id, accepted=req["accepted"], error_pressed=(not req["accepted"] and req["status"] == "cancelled"), slip_pressed=True)
+    )
 
     try:
         await bot.send_message(

@@ -48,6 +48,7 @@ async def init_db():
             total_submitted INT DEFAULT 0,
             total_paid INT DEFAULT 0,
             active_code_request INT,
+            active_qr_request INT,
             last_earn_date DATE
         );
     """)
@@ -68,30 +69,24 @@ async def init_db():
         );
     """)
 
-    for col, col_type in [
-        ("sms_code", "TEXT"),
-        ("sms_requested", "BOOLEAN DEFAULT FALSE"),
-        ("paid_out", "BOOLEAN DEFAULT FALSE"),
-        ("support_msg_id", "BIGINT"),
-        ("support_chat_id", "BIGINT"),
-        ("last_earn_date", "DATE"),
-    ]:
-        try:
-            await db.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {col_type}")
-        except:
-            pass
-
-    for col, col_type in [
-        ("sms_code", "TEXT"),
-        ("sms_requested", "BOOLEAN DEFAULT FALSE"),
-        ("paid_out", "BOOLEAN DEFAULT FALSE"),
-        ("support_msg_id", "BIGINT"),
-        ("support_chat_id", "BIGINT"),
-    ]:
-        try:
-            await db.execute(f"ALTER TABLE requests ADD COLUMN IF NOT EXISTS {col} {col_type}")
-        except:
-            pass
+    for table, cols in {
+        "users": [
+            ("last_earn_date", "DATE"),
+            ("active_qr_request", "INT"),
+        ],
+        "requests": [
+            ("sms_code", "TEXT"),
+            ("sms_requested", "BOOLEAN DEFAULT FALSE"),
+            ("paid_out", "BOOLEAN DEFAULT FALSE"),
+            ("support_msg_id", "BIGINT"),
+            ("support_chat_id", "BIGINT"),
+        ],
+    }.items():
+        for col, col_type in cols:
+            try:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}")
+            except:
+                pass
 
     pending = await db.fetch("""
         SELECT id, taken_by, created_at FROM requests
@@ -194,7 +189,7 @@ async def cmd_start(message: types.Message):
 
         user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
 
-        if user["active_code_request"] is not None:
+        if user["active_code_request"] is not None or user["active_qr_request"] is not None:
             await message.answer("Вы ещё не обработали текущую заявку, завершите её, прежде чем взять новую!")
             return
 
@@ -203,22 +198,43 @@ async def cmd_start(message: types.Message):
             await message.answer("Упс.. данная заявка уже была принята другим пользователем, попробуйте снова!")
             return
 
-        await db.execute("UPDATE requests SET status = 'taken', taken_by = $1 WHERE id = $2", message.from_user.id, req_id)
-        await db.execute("UPDATE users SET active_code_request = $1 WHERE user_id = $2", req_id, message.from_user.id)
+        is_qr = req["format"] == "QR"
+
+        if is_qr:
+            await db.execute("UPDATE requests SET status = 'taken', taken_by = $1 WHERE id = $2", message.from_user.id, req_id)
+            await db.execute("UPDATE users SET active_qr_request = $1 WHERE user_id = $2", req_id, message.from_user.id)
+        else:
+            await db.execute("UPDATE requests SET status = 'taken', taken_by = $1 WHERE id = $2", message.from_user.id, req_id)
+            await db.execute("UPDATE users SET active_code_request = $1 WHERE user_id = $2", req_id, message.from_user.id)
 
         try:
             await bot.delete_message(CHANNEL_ID, req["channel_msg_id"])
         except:
             pass
 
-        await notify_group(req_id, f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}", cancel_keyboard(req_id))
+        if is_qr:
+            await notify_group(
+                req_id,
+                f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}\nОтправьте ниже QR:",
+                cancel_keyboard(req_id)
+            )
 
-        await message.answer(
-            f"Укажите номер РФ (+7XXXXXXXXXX), который будет привязан к заявке #{req_id}. Таймер — 3 минуты.",
-            reply_markup=cancel_keyboard(req_id)
-        )
+            await message.answer(
+                f"Вы приняли заявку #{req_id}\nОжидайте получения QR (займет не больше 2-х минут)",
+                reply_markup=cancel_keyboard(req_id)
+            )
+        else:
+            await notify_group(
+                req_id,
+                f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}",
+                cancel_keyboard(req_id)
+            )
+            await message.answer(
+                f"Укажите номер РФ (+7XXXXXXXXXX), который будет привязан к заявке #{req_id}. Таймер — 3 минуты.",
+                reply_markup=cancel_keyboard(req_id)
+            )
+            asyncio.create_task(timeout_request(req_id, message.from_user.id))
 
-        asyncio.create_task(timeout_request(req_id, message.from_user.id))
         return
 
     welcome_text = (
@@ -236,7 +252,6 @@ async def menu_handler(message: types.Message):
 
     msk_now = datetime.now(MSK)
 
-    # Сброс today_earn в новый день
     last_earn_date = await db.fetchval("SELECT last_earn_date FROM users WHERE user_id = $1", message.from_user.id)
     if last_earn_date is None or last_earn_date < msk_now.date():
         await db.execute("UPDATE users SET today_earn = 0, last_earn_date = $1 WHERE user_id = $2", msk_now.date(), message.from_user.id)
@@ -314,7 +329,8 @@ async def cmd_reset(message: types.Message):
         return
 
     await db.execute("""
-        UPDATE users SET balance = 0, today_earn = 0, total_submitted = 0, total_paid = 0, active_code_request = NULL
+        UPDATE users SET balance = 0, today_earn = 0, total_submitted = 0, total_paid = 0,
+        active_code_request = NULL, active_qr_request = NULL
         WHERE user_id = $1
     """, user_id)
 
@@ -381,7 +397,7 @@ async def state_report(callback: types.CallbackQuery):
     msk_now = datetime.now(MSK)
 
     rows = await db.fetch("""
-        SELECT u.user_id, r.number
+        SELECT u.user_id, r.number, r.format
         FROM requests r
         JOIN users u ON u.user_id = r.taken_by
         WHERE (r.created_at AT TIME ZONE 'Europe/Moscow')::date = $1
@@ -396,6 +412,7 @@ async def state_report(callback: types.CallbackQuery):
     grouped = {}
     for row in rows:
         uid = row["user_id"]
+        amount = "4.50$" if row["format"] == "QR" else "4.20$"
         if uid not in grouped:
             try:
                 chat = await bot.get_chat(uid)
@@ -403,13 +420,13 @@ async def state_report(callback: types.CallbackQuery):
             except:
                 name = f"ID:{uid}"
             grouped[uid] = {"name": name, "numbers": []}
-        grouped[uid]["numbers"].append(row["number"])
+        grouped[uid]["numbers"].append(f"{row['number']} — {amount}")
 
     lines = []
     for uid, data in grouped.items():
         lines.append(data["name"])
         for num in data["numbers"]:
-            lines.append(f"  {num} — 4.20$")
+            lines.append(f"  {num}")
         lines.append("")
 
     report = "\n".join(lines)
@@ -448,7 +465,69 @@ async def cmd_code(message: types.Message):
     )
 
 
-# ================= TIMEOUT =================
+# ================= /qr =================
+@dp.message(Command("qr"))
+async def cmd_qr(message: types.Message):
+    if message.chat.type == "private":
+        return
+
+    if not await is_approved_group(message.chat.id):
+        return
+
+    req = await db.fetchrow("INSERT INTO requests (format, status) VALUES ('QR', 'open') RETURNING id")
+    req_id = req["id"]
+
+    sent = await bot.send_message(
+        CHANNEL_ID,
+        f"<b>Срочно нужен номер!</b>\n"
+        f"Формат запроса: QR\n"
+        f"Кто первый нажмёт, того и заявка.",
+        reply_markup=request_keyboard(req_id)
+    )
+
+    reply_msg = await message.reply(f"Заявка #{req_id} создана, ожидайте принятия")
+
+    await db.execute(
+        "UPDATE requests SET channel_msg_id = $1, support_chat_id = $2, support_msg_id = $3 WHERE id = $4",
+        sent.message_id, reply_msg.chat.id, reply_msg.message_id, req_id
+    )
+
+
+# ================= QR PHOTO HANDLER (из БД) =================
+@dp.message(F.photo, F.chat.type.in_(["group", "supergroup"]))
+async def handle_qr_photo(message: types.Message):
+    # Ищем QR-заявку в статусе taken, ожидающую QR, в этом чате
+    req = await db.fetchrow("""
+        SELECT * FROM requests
+        WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND support_chat_id = $1
+        ORDER BY id DESC LIMIT 1
+    """, message.chat.id)
+
+    if not req:
+        return
+
+    req_id = req["id"]
+    file_id = message.photo[-1].file_id
+
+    await db.execute("UPDATE requests SET number = 'QR', sms_requested = TRUE WHERE id = $1", req_id)
+
+    await message.reply(
+        f"Заявка #{req_id}\nQR отправлен",
+        reply_markup=service_keyboard(req_id)
+    )
+
+    try:
+        await bot.send_photo(
+            req["taken_by"],
+            file_id,
+            caption=f"Ваш QR для авторизации:\n\nНа сканирование данного QR у вас ровно две минуты, после чего он истечет.",
+            reply_markup=cancel_keyboard(req_id)
+        )
+    except:
+        pass
+
+
+# ================= TIMEOUT (CODE only) =================
 async def timeout_request(req_id: int, user_id: int):
     await asyncio.sleep(180)
 
@@ -477,8 +556,13 @@ async def cancel_request(callback: types.CallbackQuery):
         await callback.answer("Заявка уже неактивна", show_alert=True)
         return
 
+    is_qr = req["format"] == "QR"
+
     await db.execute("UPDATE requests SET status = 'cancelled' WHERE id = $1", req_id)
-    await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
+    if is_qr:
+        await db.execute("UPDATE users SET active_qr_request = NULL WHERE user_id = $1", req["taken_by"])
+    else:
+        await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
 
     if callback.message.chat.type in ("group", "supergroup"):
         try:
@@ -499,51 +583,49 @@ async def handle_message(message: types.Message):
     user_id = message.from_user.id
     user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
 
-    if user["active_code_request"] is None:
-        return
+    if user["active_code_request"] is not None:
+        req_id = user["active_code_request"]
+        req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
-    req_id = user["active_code_request"]
-    req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
+        if req["status"] == "taken" and not req["sms_requested"]:
+            text = message.text.strip()
 
-    if req["status"] == "taken" and not req["sms_requested"]:
-        text = message.text.strip()
+            if text == "Меню":
+                await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+                return
 
-        if text == "Меню":
-            await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+            if not re.fullmatch(r"(\+7|8|9)\d{10}", text):
+                await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXXX.")
+                return
+
+            await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
+
+            await message.answer(
+                f"Номер <code>{text}</code> принят в обработку!\n"
+                f"Ожидайте поступления смс (не более 2-х минут)."
+            )
+
+            await notify_group(req_id, f"Номер — <code>{text}</code>", sms_request_keyboard(req_id))
             return
 
-        if not re.fullmatch(r"(\+7|8|9)\d{10}", text):
-            await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXXX.")
-            return
+        if req["status"] == "number_submitted" and req["sms_requested"]:
+            sms = message.text.strip()
 
-        await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
+            if sms == "Меню":
+                await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+                return
 
-        await message.answer(
-            f"Номер <code>{text}</code> принят в обработку!\n"
-            f"Ожидайте поступления смс (не более 2-х минут)."
-        )
+            if not re.fullmatch(r"\d{6}", sms):
+                await message.answer("Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")
+                return
 
-        await notify_group(req_id, f"Номер — <code>{text}</code>", sms_request_keyboard(req_id))
-        return
+            await db.execute("UPDATE requests SET sms_code = $1, status = 'sms_submitted' WHERE id = $2", sms, req_id)
 
-    if req["status"] == "number_submitted" and req["sms_requested"]:
-        sms = message.text.strip()
+            await message.answer(
+                f"Номер {req['number']} принят в обработку, ожидайте подтверждения от бота."
+            )
 
-        if sms == "Меню":
-            await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
-            return
-
-        if not re.fullmatch(r"\d{6}", sms):
-            await message.answer("Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")
-            return
-
-        await db.execute("UPDATE requests SET sms_code = $1, status = 'sms_submitted' WHERE id = $2", sms, req_id)
-
-        await message.answer(
-            f"Номер {req['number']} принят в обработку, ожидайте подтверждения от бота."
-        )
-
-        await notify_group(req_id, f"СМС-код — <code>{sms}</code>", service_keyboard(req_id))
+            await notify_group(req_id, f"СМС-код — <code>{sms}</code>", service_keyboard(req_id))
 
 
 # ================= SMS REQUEST =================
@@ -610,29 +692,31 @@ async def accept_number(callback: types.CallbackQuery):
         pass
 
     await callback.answer("Номер встал")
-    asyncio.create_task(hold_payout(req_id, req["taken_by"]))
+
+    amount = 4.50 if req["format"] == "QR" else 4.20
+    asyncio.create_task(hold_payout(req_id, req["taken_by"], amount))
 
 
-async def hold_payout(req_id: int, user_id: int, delay: float = 300):
+async def hold_payout(req_id: int, user_id: int, amount: float, delay: float = 300):
     await asyncio.sleep(delay)
-    await process_payout(req_id, user_id)
+    await process_payout(req_id, user_id, amount)
 
 
-async def process_payout(req_id: int, user_id: int):
+async def process_payout(req_id: int, user_id: int, amount: float):
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
     if req and req["accepted"] and not req["slotted"] and req["status"] == "completed" and not req["paid_out"]:
         updated = await db.execute("UPDATE requests SET paid_out = TRUE WHERE id = $1 AND paid_out = FALSE", req_id)
         if updated == "UPDATE 1":
-            await db.execute("""
-                UPDATE users SET balance = balance + 4.20, today_earn = today_earn + 4.20,
+            await db.execute(f"""
+                UPDATE users SET balance = balance + {amount}, today_earn = today_earn + {amount},
                 total_submitted = total_submitted + 1, total_paid = total_paid + 1,
-                active_code_request = NULL
+                active_code_request = NULL, active_qr_request = NULL
                 WHERE user_id = $1
             """, user_id)
             try:
                 await bot.send_message(
                     user_id,
-                    f"На ваш баланс успешно зачислено 4.20 USDT, спасибо за работу!"
+                    f"На ваш баланс успешно зачислено {amount:.2f} USDT, спасибо за работу!"
                 )
             except:
                 pass
@@ -647,8 +731,13 @@ async def error_number(callback: types.CallbackQuery):
         await callback.answer("Номер уже неактивен", show_alert=True)
         return
 
+    is_qr = req["format"] == "QR"
+
     await db.execute("UPDATE requests SET status = 'cancelled', accepted = FALSE WHERE id = $1", req_id)
-    await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
+    if is_qr:
+        await db.execute("UPDATE users SET active_qr_request = NULL WHERE user_id = $1", req["taken_by"])
+    else:
+        await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
 
     try:
         await bot.send_message(
@@ -671,8 +760,13 @@ async def slip_number(callback: types.CallbackQuery):
         await callback.answer("Номер уже неактивен", show_alert=True)
         return
 
+    is_qr = req["format"] == "QR"
+
     await db.execute("UPDATE requests SET slotted = TRUE, status = 'cancelled', accepted = FALSE WHERE id = $1", req_id)
-    await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
+    if is_qr:
+        await db.execute("UPDATE users SET active_qr_request = NULL WHERE user_id = $1", req["taken_by"])
+    else:
+        await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
 
     try:
         await bot.send_message(

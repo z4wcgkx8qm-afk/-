@@ -47,7 +47,8 @@ async def init_db():
             today_earn NUMERIC DEFAULT 0,
             total_submitted INT DEFAULT 0,
             total_paid INT DEFAULT 0,
-            active_code_request INT
+            active_code_request INT,
+            last_earn_date DATE
         );
     """)
 
@@ -66,6 +67,19 @@ async def init_db():
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
+
+    for col, col_type in [
+        ("sms_code", "TEXT"),
+        ("sms_requested", "BOOLEAN DEFAULT FALSE"),
+        ("paid_out", "BOOLEAN DEFAULT FALSE"),
+        ("support_msg_id", "BIGINT"),
+        ("support_chat_id", "BIGINT"),
+        ("last_earn_date", "DATE"),
+    ]:
+        try:
+            await db.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {col_type}")
+        except:
+            pass
 
     for col, col_type in [
         ("sms_code", "TEXT"),
@@ -219,6 +233,14 @@ async def cmd_start(message: types.Message):
 @dp.message(F.text == "Меню", F.chat.type == "private")
 async def menu_handler(message: types.Message):
     await ensure_user(message.from_user.id)
+
+    msk_now = datetime.now(MSK)
+
+    # Сброс today_earn в новый день
+    last_earn_date = await db.fetchval("SELECT last_earn_date FROM users WHERE user_id = $1", message.from_user.id)
+    if last_earn_date is None or last_earn_date < msk_now.date():
+        await db.execute("UPDATE users SET today_earn = 0, last_earn_date = $1 WHERE user_id = $2", msk_now.date(), message.from_user.id)
+
     user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
     user_id = user["user_id"]
 

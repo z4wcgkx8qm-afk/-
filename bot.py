@@ -988,6 +988,6 @@ async def main():
     finally:
         await http_client.aclose()
 
-
+#оыо
 if __name__ == "__main__":
     asyncio.run(main())

@@ -12,7 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import BufferedInputFile
 
-from cryptobot import CryptoBotClient
+from cryptobot import AsyncCryptoBotClient
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -29,7 +29,7 @@ MSK = ZoneInfo("Europe/Moscow")
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 db: asyncpg.Pool = None
-crypto: CryptoBotClient = None
+crypto: AsyncCryptoBotClient = None
 
 
 # ================= DB =================
@@ -370,15 +370,15 @@ async def handle_withdraw_amount(message: types.Message):
         await message.answer(f"Ошибка при создании чека: {e}")
 
 
-# ================= /addfunds =================
-@dp.message(Command("addfunds"), F.chat.type == "private")
-async def cmd_addfunds(message: types.Message):
+# ================= /set =================
+@dp.message(Command("set"))
+async def cmd_set(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
     args = message.text.split()
     if len(args) != 2:
-        await message.answer("Использование: /addfunds сумма")
+        await message.answer("Использование: /set сумма")
         return
 
     try:
@@ -909,10 +909,12 @@ async def slip_number(callback: types.CallbackQuery):
 # ================= RUN =================
 async def main():
     global crypto
-    crypto = CryptoBotClient(CRYPTO_BOT_TOKEN)
-
-    await init_db()
-    await dp.start_polling(bot)
+    async with AsyncCryptoBotClient(
+        api_token=CRYPTO_BOT_TOKEN,
+        is_mainnet=True
+    ) as crypto:
+        await init_db()
+        await dp.start_polling(bot)
 
 
 if __name__ == "__main__":

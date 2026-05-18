@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 import asyncpg
@@ -130,12 +129,17 @@ async def crypto_create_invoice(amount: float, description: str = "") -> dict:
     })
 
 
-async def crypto_create_check(amount: float, user_id: int) -> dict:
-    return await crypto_request("createCheck", {
+async def crypto_transfer(amount: float, user_id: int, spend_id: str) -> dict:
+    return await crypto_request("transfer", {
         "asset": "USDT",
         "amount": str(amount),
-        "pin_to_user_id": user_id
+        "user_id": user_id,
+        "spend_id": spend_id
     })
+
+
+async def crypto_delete_check(check_id: int) -> dict:
+    return await crypto_request("deleteCheck", {"check_id": check_id})
 
 
 async def crypto_get_balance() -> float:
@@ -223,15 +227,6 @@ def service_keyboard(req_id: int, accepted: bool = False):
         builder.add(types.InlineKeyboardButton(text="Встал", callback_data=f"accept_{req_id}"))
     builder.add(types.InlineKeyboardButton(text="Ошибка", callback_data=f"error_{req_id}"))
     builder.add(types.InlineKeyboardButton(text="Слет", callback_data=f"slip_{req_id}"))
-    return builder.as_markup()
-
-
-def claim_keyboard(check_id: int):
-    builder = InlineKeyboardBuilder()
-    builder.add(types.InlineKeyboardButton(
-        text="Забрать USDT",
-        url=f"https://t.me/CryptoBot?start=check_{check_id}"
-    ))
     return builder.as_markup()
 
 
@@ -362,7 +357,7 @@ async def withdraw_start(callback: types.CallbackQuery):
 
     await callback.message.answer(
         "Укажите сумму для вывода в USDT.\n"
-        "Средства поступят на ваш кошелёк моментально после создания чека."
+        "Средства поступят на ваш кошелёк моментально."
     )
     await callback.answer()
 
@@ -389,17 +384,16 @@ async def handle_withdraw_amount(message: types.Message):
         return
 
     try:
-        result = await crypto_create_check(amount, message.from_user.id)
-        check_id = result["check_id"]
+        spend_id = f"wd_{message.from_user.id}_{int(datetime.now().timestamp())}"
+        await crypto_transfer(amount, message.from_user.id, spend_id)
 
         await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
 
         await message.answer(
-            f"💳 Ваш счёт на {amount:.2f} USDT успешно создан, нажмите кнопку ниже, чтобы деньги зачислились на ваш кошелёк.",
-            reply_markup=claim_keyboard(check_id)
+            f"✅ Вывод на {amount:.2f} USDT успешно выполнен. Средства зачислены на ваш кошелёк."
         )
     except Exception as e:
-        await message.answer(f"Ошибка при создании чека: {e}")
+        await message.answer(f"Ошибка при выводе: {e}")
 
 
 # ================= /help =================
@@ -413,6 +407,7 @@ async def cmd_help(message: types.Message):
         "/set сумма — пополнить баланс бота через инвойс\n"
         "/state — статистика за сегодня + баланс бота\n"
         "/reset user_id — обнулить профиль пользователя\n"
+        "/delcheck check_id — удалить чек и вернуть средства\n"
         "/help — список команд"
     )
     await message.reply(text)
@@ -489,6 +484,28 @@ async def cmd_reset(message: types.Message):
     """, user_id)
 
     await message.reply(f"Профиль пользователя {user_id} обнулён.")
+
+
+# ================= /delcheck =================
+@dp.message(Command("delcheck"))
+@require_approved_group
+async def cmd_delcheck(message: types.Message):
+    args = message.text.split()
+    if len(args) != 2:
+        await message.reply("Использование: /delcheck check_id")
+        return
+
+    try:
+        check_id = int(args[1])
+    except ValueError:
+        await message.reply("Неверный check_id")
+        return
+
+    try:
+        await crypto_delete_check(check_id)
+        await message.reply(f"Чек {check_id} удалён. Средства возвращены на баланс.")
+    except Exception as e:
+        await message.reply(f"Ошибка при удалении чека: {e}")
 
 
 # ================= /state =================

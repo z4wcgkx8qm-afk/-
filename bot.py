@@ -12,6 +12,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import BufferedInputFile
 
+from cryptobot_python import CryptoBotClient
+
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -20,12 +22,14 @@ NEWS_CHANNEL_URL = os.getenv("NEWS_CHANNEL_URL", "")
 AGREEMENT_URL = os.getenv("AGREEMENT_URL", "")
 DATABASE_URL = os.getenv("DATABASE_URL")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "maxuprobot").replace("@", "")
+CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN", "")
 
 MSK = ZoneInfo("Europe/Moscow")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 db: asyncpg.Pool = None
+crypto: CryptoBotClient = None
 
 
 # ================= DB =================
@@ -130,6 +134,17 @@ async def notify_group(req_id: int, text: str, reply_markup=None):
         pass
 
 
+async def get_crypto_balance() -> float:
+    try:
+        balances = await crypto.get_balances()
+        for b in balances:
+            if b.currency_code == "USDT":
+                return float(b.available)
+    except:
+        pass
+    return 0.0
+
+
 # ================= KEYBOARDS =================
 def main_keyboard():
     builder = ReplyKeyboardBuilder()
@@ -172,6 +187,15 @@ def service_keyboard(req_id: int, accepted: bool = False):
         builder.add(types.InlineKeyboardButton(text="Встал", callback_data=f"accept_{req_id}"))
     builder.add(types.InlineKeyboardButton(text="Ошибка", callback_data=f"error_{req_id}"))
     builder.add(types.InlineKeyboardButton(text="Слет", callback_data=f"slip_{req_id}"))
+    return builder.as_markup()
+
+
+def claim_keyboard(check_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(
+        text="Забрать USDT",
+        url=f"https://t.me/CryptoBot?start=check_{check_id}"
+    ))
     return builder.as_markup()
 
 
@@ -291,9 +315,91 @@ async def menu_handler(message: types.Message):
     await message.answer(text, reply_markup=withdraw_keyboard())
 
 
+# ================= WITHDRAW =================
 @dp.callback_query(F.data == "withdraw")
-async def withdraw_stub(callback: types.CallbackQuery):
-    await callback.answer("Вывод в разработке", show_alert=True)
+async def withdraw_start(callback: types.CallbackQuery):
+    await callback.message.answer(
+        "Укажите сумму для вывода в USDT.\n"
+        "Средства поступят на ваш кошелёк моментально после создания чека."
+    )
+    await callback.answer()
+
+
+@dp.message(F.text, F.chat.type == "private")
+async def handle_withdraw_amount(message: types.Message):
+    # Проверяем, не в процессе ли ввода номера/смс
+    user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
+    if user["active_code_request"] is not None or user["active_qr_request"] is not None:
+        await handle_message(message)
+        return
+
+    try:
+        amount = float(message.text.strip().replace(",", "."))
+    except ValueError:
+        return
+
+    if amount <= 0:
+        await message.answer("Сумма должна быть больше нуля.")
+        return
+
+    if amount > user["balance"]:
+        await message.answer("Недостаточно средств на балансе.")
+        return
+
+    # Создаём чек через CryptoBot
+    try:
+        check = await crypto.create_check(
+            asset="USDT",
+            amount=amount,
+            pin_to_user_id=message.from_user.id
+        )
+        check_id = check.check_id
+
+        # Списываем с баланса
+        await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
+
+        await message.answer(
+            f"💳 Ваш счёт на {amount:.2f} USDT успешно создан, нажмите кнопку ниже, чтобы деньги зачислились на ваш кошелёк.",
+            reply_markup=claim_keyboard(check_id)
+        )
+    except Exception as e:
+        await message.answer(f"Ошибка при создании чека: {e}")
+
+
+# ================= /addfunds =================
+@dp.message(Command("addfunds"), F.chat.type == "private")
+async def cmd_addfunds(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("Использование: /addfunds сумма")
+        return
+
+    try:
+        amount = float(args[1].replace(",", "."))
+    except ValueError:
+        await message.answer("Неверная сумма")
+        return
+
+    if amount <= 0:
+        await message.answer("Сумма должна быть больше нуля")
+        return
+
+    try:
+        invoice = await crypto.create_invoice(
+            asset="USDT",
+            amount=amount,
+            description="Пополнение баланса бота MAXup"
+        )
+        await message.answer(
+            f"Счёт на {amount} USDT создан.\n"
+            f"Оплатите по ссылке:\n"
+            f"{invoice.bot_invoice_url}"
+        )
+    except Exception as e:
+        await message.answer(f"Ошибка при создании счёта: {e}")
 
 
 # ================= /setup =================
@@ -377,13 +483,16 @@ async def cmd_state(message: types.Message):
         SELECT COALESCE(SUM(today_earn), 0) FROM users
     """)
 
+    crypto_balance = await get_crypto_balance()
+
     text = (
         f"📊 Статистика за сегодня ({today_str}):\n"
         f"👥 Пользователей: {users_count}\n"
         f"✅ Встало: {stood}\n"
         f"❌ Ошибок: {errors}\n"
         f"⏱ Слетов: {slips}\n"
-        f"💰 Выплачено: {total_earn:.2f} USDT"
+        f"💰 Выплачено: {total_earn:.2f} USDT\n"
+        f"🏦 Баланс бота: {crypto_balance:.2f} USDT"
     )
 
     builder = InlineKeyboardBuilder()
@@ -497,10 +606,9 @@ async def cmd_qr(message: types.Message):
     )
 
 
-# ================= QR PHOTO HANDLER (единый) =================
+# ================= QR PHOTO HANDLER =================
 @dp.message(F.photo, F.chat.type.in_(["group", "supergroup"]))
 async def handle_qr_photo(message: types.Message):
-    # Проверка: фото ответом на сообщение с qr_await_msg_id
     if message.reply_to_message:
         replied_msg_id = message.reply_to_message.message_id
 
@@ -531,7 +639,6 @@ async def handle_qr_photo(message: types.Message):
                 pass
             return
 
-    # Фото не ответом — проверяем, есть ли ожидающая QR заявка в этом чате
     req = await db.fetchrow("""
         SELECT id FROM requests
         WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND support_chat_id = $1
@@ -592,7 +699,7 @@ async def cancel_request(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ================= USER INPUT =================
+# ================= USER INPUT (CODE/SMS) =================
 @dp.message(F.text, F.chat.type == "private")
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
@@ -797,6 +904,9 @@ async def slip_number(callback: types.CallbackQuery):
 
 # ================= RUN =================
 async def main():
+    global crypto
+    crypto = CryptoBotClient(CRYPTO_BOT_TOKEN)
+
     await init_db()
     await dp.start_polling(bot)
 

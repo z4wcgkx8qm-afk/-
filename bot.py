@@ -133,7 +133,7 @@ async def crypto_transfer(amount: float, user_id: int, spend_id: str) -> dict:
     return await crypto_request("transfer", {
         "asset": "USDT",
         "amount": str(amount),
-        "user_id": user_id,
+        "user_id": str(user_id),
         "spend_id": spend_id
     })
 
@@ -503,7 +503,7 @@ async def cmd_delcheck(message: types.Message):
 
     try:
         await crypto_delete_check(check_id)
-        await message.reply(f"Чек {check_id} удалён. Средства возвращены на баланс.")
+        await message.reply(f"Чек {check_id} удалён. Средства возвращены на баланс бота.")
     except Exception as e:
         await message.reply(f"Ошибка при удалении чека: {e}")
 

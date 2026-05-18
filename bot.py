@@ -2,6 +2,7 @@ import os
 import asyncio
 import asyncpg
 import re
+import httpx
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -11,8 +12,6 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import BufferedInputFile
-
-from cryptobot import AsyncCryptoBotClient
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -25,11 +24,12 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "maxuprobot").replace("@", "")
 CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN", "")
 
 MSK = ZoneInfo("Europe/Moscow")
+CRYPTO_API = "https://pay.crypt.bot/api"
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 db: asyncpg.Pool = None
-crypto: AsyncCryptoBotClient = None
+http_client: httpx.AsyncClient = None
 
 
 # ================= DB =================
@@ -109,6 +109,42 @@ async def init_db():
             await process_payout(req["id"], req["taken_by"])
 
 
+# ================= CRYPTO API =================
+async def crypto_request(method: str, params: dict = None) -> dict:
+    headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
+    url = f"{CRYPTO_API}/{method}"
+    resp = await http_client.post(url, headers=headers, json=params or {})
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("ok"):
+        raise Exception(data.get("error", "Unknown error"))
+    return data["result"]
+
+
+async def crypto_create_invoice(amount: float, description: str = "") -> dict:
+    return await crypto_request("createInvoice", {
+        "asset": "USDT",
+        "amount": str(amount),
+        "description": description
+    })
+
+
+async def crypto_create_check(amount: float, user_id: int) -> dict:
+    return await crypto_request("createCheck", {
+        "asset": "USDT",
+        "amount": str(amount),
+        "pin_to_user_id": user_id
+    })
+
+
+async def crypto_get_balance() -> float:
+    balances = await crypto_request("getBalance")
+    for b in balances:
+        if b["currency_code"] == "USDT":
+            return float(b["available"])
+    return 0.0
+
+
 # ================= HELPERS =================
 async def ensure_user(user_id: int):
     await db.execute("INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING;", user_id)
@@ -132,17 +168,6 @@ async def notify_group(req_id: int, text: str, reply_markup=None):
         )
     except:
         pass
-
-
-async def get_crypto_balance() -> float:
-    try:
-        balances = await crypto.get_balances()
-        for b in balances:
-            if b.currency_code == "USDT":
-                return float(b.available)
-    except:
-        pass
-    return 0.0
 
 
 # ================= KEYBOARDS =================
@@ -353,12 +378,8 @@ async def handle_withdraw_amount(message: types.Message):
         return
 
     try:
-        check = await crypto.create_check(
-            asset="USDT",
-            amount=amount,
-            pin_to_user_id=message.from_user.id
-        )
-        check_id = check.check_id
+        result = await crypto_create_check(amount, message.from_user.id)
+        check_id = result["check_id"]
 
         await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
 
@@ -392,15 +413,11 @@ async def cmd_set(message: types.Message):
         return
 
     try:
-        invoice = await crypto.create_invoice(
-            asset="USDT",
-            amount=amount,
-            description="Пополнение баланса бота MAXup"
-        )
+        result = await crypto_create_invoice(amount, "Пополнение баланса бота MAXup")
         await message.answer(
             f"Счёт на {amount} USDT создан.\n"
             f"Оплатите по ссылке:\n"
-            f"{invoice.bot_invoice_url}"
+            f"{result['pay_url']}"
         )
     except Exception as e:
         await message.answer(f"Ошибка при создании счёта: {e}")
@@ -487,7 +504,7 @@ async def cmd_state(message: types.Message):
         SELECT COALESCE(SUM(today_earn), 0) FROM users
     """)
 
-    crypto_balance = await get_crypto_balance()
+    crypto_balance = await crypto_get_balance()
 
     text = (
         f"📊 Статистика за сегодня ({today_str}):\n"
@@ -908,13 +925,13 @@ async def slip_number(callback: types.CallbackQuery):
 
 # ================= RUN =================
 async def main():
-    global crypto
-    async with AsyncCryptoBotClient(
-        api_token=CRYPTO_BOT_TOKEN,
-        is_mainnet=True
-    ) as crypto:
+    global http_client
+    http_client = httpx.AsyncClient(timeout=30.0)
+    try:
         await init_db()
         await dp.start_polling(bot)
+    finally:
+        await http_client.aclose()
 
 
 if __name__ == "__main__":

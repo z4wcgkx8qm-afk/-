@@ -136,7 +136,8 @@ async def crypto_transfer(amount: float, user_id: int, spend_id: str) -> dict:
         "asset": "USDT",
         "amount": str(amount),
         "user_id": user_id,
-        "spend_id": spend_id
+        "spend_id": spend_id,
+        "comment": "Выплата от MAXup"
     })
 
 
@@ -150,6 +151,22 @@ async def crypto_get_balance() -> float:
         if b["currency_code"] == "USDT":
             return float(b["available"])
     return 0.0
+
+
+async def check_invoice_status(invoice_id: int, chat_id: int, reply_msg_id: int, amount: float):
+    for _ in range(60):
+        await asyncio.sleep(10)
+        try:
+            invoices = await crypto_request("getInvoices", {"invoice_ids": [invoice_id], "status": "paid"})
+            if invoices and len(invoices) > 0:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"Баланс бота успешно пополнен на {amount} USDT!",
+                    reply_to_message_id=reply_msg_id
+                )
+                return
+        except:
+            pass
 
 
 # ================= HELPERS =================
@@ -358,7 +375,7 @@ async def withdraw_start(callback: types.CallbackQuery):
         return
 
     await callback.message.answer(
-        "Укажите сумму для вывода в USDT.\n"
+        "Укажите сумму для вывода в USDT (минимум 1 USDT).\n"
         "Средства поступят на ваш кошелёк моментально."
     )
     await callback.answer()
@@ -377,18 +394,29 @@ async def handle_withdraw_amount(message: types.Message):
     except ValueError:
         return
 
-    if amount <= 0:
-        await message.answer("Сумма должна быть больше нуля.")
+    if amount < 1:
+        await message.answer("Минимальная сумма вывода — 1 USDT!")
         return
 
     if amount > user["balance"]:
         await message.answer("Недостаточно средств на балансе.")
         return
 
+    # Проверяем баланс бота
+    bot_balance = await crypto_get_balance()
+    if bot_balance < amount:
+        await message.answer(
+            "Баланс бота меньше вашей суммы вывода. "
+            "Подождите, пока администратор пополнит казну (не более 10 минут), "
+            "после чего можете повторить запрос!"
+        )
+        return
+
     try:
         spend_id = f"wd_{message.from_user.id}_{int(datetime.now().timestamp())}"
         await crypto_transfer(amount, message.from_user.id, spend_id)
 
+        # Списываем только после успешного перевода
         await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
 
         await message.answer(
@@ -441,6 +469,13 @@ async def cmd_set(message: types.Message):
             f"Оплатите по ссылке:\n"
             f"{result['pay_url']}"
         )
+        # Запускаем фоновую проверку оплаты
+        asyncio.create_task(check_invoice_status(
+            result["invoice_id"],
+            message.chat.id,
+            message.message_id,
+            amount
+        ))
     except Exception as e:
         await message.reply(f"Ошибка при создании счёта: {e}")
 

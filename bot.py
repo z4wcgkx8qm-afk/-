@@ -63,6 +63,7 @@ async def init_db():
             channel_msg_id BIGINT,
             support_msg_id BIGINT,
             support_chat_id BIGINT,
+            qr_await_msg_id BIGINT,
             accepted BOOLEAN DEFAULT FALSE,
             slotted BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT NOW()
@@ -80,6 +81,7 @@ async def init_db():
             ("paid_out", "BOOLEAN DEFAULT FALSE"),
             ("support_msg_id", "BIGINT"),
             ("support_chat_id", "BIGINT"),
+            ("qr_await_msg_id", "BIGINT"),
         ],
     }.items():
         for col, col_type in cols:
@@ -118,7 +120,7 @@ async def notify_group(req_id: int, text: str, reply_markup=None):
     if not req or not req["support_chat_id"] or not req["support_msg_id"]:
         return
     try:
-        await bot.send_message(
+        return await bot.send_message(
             chat_id=req["support_chat_id"],
             text=text,
             reply_to_message_id=req["support_msg_id"],
@@ -213,11 +215,13 @@ async def cmd_start(message: types.Message):
             pass
 
         if is_qr:
-            await notify_group(
+            sent_msg = await notify_group(
                 req_id,
-                f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}\nОтправьте ниже QR:",
+                f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}\nОтправьте ниже QR ответом на это сообщение",
                 cancel_keyboard(req_id)
             )
+            if sent_msg:
+                await db.execute("UPDATE requests SET qr_await_msg_id = $1 WHERE id = $2", sent_msg.message_id, req_id)
 
             await message.answer(
                 f"Вы приняли заявку #{req_id}\nОжидайте получения QR (займет не больше 2-х минут)",
@@ -493,15 +497,19 @@ async def cmd_qr(message: types.Message):
     )
 
 
-# ================= QR PHOTO HANDLER (из БД) =================
+# ================= QR PHOTO HANDLER =================
 @dp.message(F.photo, F.chat.type.in_(["group", "supergroup"]))
 async def handle_qr_photo(message: types.Message):
-    # Ищем QR-заявку в статусе taken, ожидающую QR, в этом чате
+    # Проверка: фото должно быть ответом на сообщение с qr_await_msg_id
+    if not message.reply_to_message:
+        return
+
+    replied_msg_id = message.reply_to_message.message_id
+
     req = await db.fetchrow("""
         SELECT * FROM requests
-        WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND support_chat_id = $1
-        ORDER BY id DESC LIMIT 1
-    """, message.chat.id)
+        WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND qr_await_msg_id = $1
+    """, replied_msg_id)
 
     if not req:
         return
@@ -525,6 +533,25 @@ async def handle_qr_photo(message: types.Message):
         )
     except:
         pass
+
+
+# ================= QR NOT REPLY WARNING =================
+@dp.message(F.photo, F.chat.type.in_(["group", "supergroup"]))
+async def handle_qr_not_reply(message: types.Message):
+    # Предупреждение если фото не ответом
+    if message.reply_to_message:
+        # Уже обработано в handle_qr_photo или не QR
+        return
+
+    # Проверяем, есть ли в этом чате ожидающая QR заявка
+    req = await db.fetchrow("""
+        SELECT id FROM requests
+        WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND support_chat_id = $1
+        ORDER BY id DESC LIMIT 1
+    """, message.chat.id)
+
+    if req:
+        await message.reply("Для прикрепления QR отправьте его ответом на сообщение с просьбой прикрепить QR!")
 
 
 # ================= TIMEOUT (CODE only) =================

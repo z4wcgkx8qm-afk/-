@@ -794,8 +794,8 @@ async def handle_message(message: types.Message):
                 await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
                 return
 
-            if not re.fullmatch(r"(\+7|8|9)\d{10}", text):
-                await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXXX.")
+            if not re.fullmatch(r"(\+7\d{10}|8\d{10}|9\d{9})", text):
+                await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXX.")
                 return
 
             await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
@@ -881,9 +881,8 @@ async def accept_number(callback: types.CallbackQuery):
 
     await db.execute("UPDATE requests SET accepted = TRUE, slotted = FALSE, status = 'completed' WHERE id = $1", req_id)
 
-    # Обновляем клавиатуру: Встал ✅, Ошибка/Слет без ✅
     await callback.message.edit_reply_markup(
-        reply_markup=service_keyboard(req_id, accepted=True, error_pressed=False, slip_pressed=False)
+        reply_markup=service_keyboard(req_id, accepted=True)
     )
 
     try:
@@ -942,9 +941,8 @@ async def error_number(callback: types.CallbackQuery):
     else:
         await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
 
-    # Обновляем клавиатуру: Ошибка ✅
     await callback.message.edit_reply_markup(
-        reply_markup=service_keyboard(req_id, accepted=req["accepted"], error_pressed=True, slip_pressed=req["slotted"])
+        reply_markup=service_keyboard(req_id, accepted=False, error_pressed=True)
     )
 
     try:
@@ -964,6 +962,10 @@ async def slip_number(callback: types.CallbackQuery):
     req_id = int(callback.data.split("_")[1])
     req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
 
+    if not req["accepted"]:
+        await callback.answer("Номер ещё не подтверждён", show_alert=True)
+        return
+
     if req["status"] not in ("number_submitted", "sms_submitted", "taken", "completed"):
         await callback.answer("Номер уже неактивен", show_alert=True)
         return
@@ -976,9 +978,8 @@ async def slip_number(callback: types.CallbackQuery):
     else:
         await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", req["taken_by"])
 
-    # Обновляем клавиатуру: Слет ✅
     await callback.message.edit_reply_markup(
-        reply_markup=service_keyboard(req_id, accepted=req["accepted"], error_pressed=(not req["accepted"] and req["status"] == "cancelled"), slip_pressed=True)
+        reply_markup=service_keyboard(req_id, accepted=False, slip_pressed=True)
     )
 
     try:

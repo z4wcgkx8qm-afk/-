@@ -160,7 +160,7 @@ async def check_invoice_status(invoice_id: int, chat_id: int, reply_msg_id: int,
             if invoices and len(invoices) > 0:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"Баланс бота успешно пополнен на {amount} USDT!",
+                    text=f"🏦 Баланс бота успешно пополнен на <code>{amount}</code> USDT!",
                     reply_to_message_id=reply_msg_id
                 )
                 return
@@ -271,12 +271,12 @@ async def cmd_start(message: types.Message):
         user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
 
         if user["active_code_request"] is not None or user["active_qr_request"] is not None:
-            await message.answer("Вы ещё не обработали текущую заявку, завершите её, прежде чем взять новую!")
+            await message.answer("🚫 Вы ещё не обработали текущую заявку, завершите её, прежде чем взять новую!")
             return
 
         req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
         if req is None or req["status"] != "open":
-            await message.answer("Упс.. данная заявка уже была принята другим пользователем, попробуйте снова!")
+            await message.answer("🚫 Упс.. данная заявка уже была принята другим пользователем, попробуйте снова!")
             return
 
         is_qr = req["format"] == "QR"
@@ -296,24 +296,24 @@ async def cmd_start(message: types.Message):
         if is_qr:
             sent_msg = await notify_group(
                 req_id,
-                f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}\nОтправьте ниже QR ответом на это сообщение",
+                f"📥 Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}\nОтправьте ниже QR ответом на это сообщение",
                 cancel_keyboard(req_id)
             )
             if sent_msg:
                 await db.execute("UPDATE requests SET qr_await_msg_id = $1 WHERE id = $2", sent_msg.message_id, req_id)
 
             await message.answer(
-                f"Вы приняли заявку #{req_id}\nОжидайте получения QR (займет не больше 2-х минут)",
+                f"📥 Вы приняли заявку <code>#{req_id}</code>\nОжидайте получения QR (займет не больше 2-х минут)",
                 reply_markup=cancel_keyboard(req_id)
             )
         else:
             await notify_group(
                 req_id,
-                f"Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}",
+                f"📥 Заявка #{req_id} успешно принята, пользователь @{message.from_user.username or 'user'}",
                 cancel_keyboard(req_id)
             )
             await message.answer(
-                f"Укажите номер РФ (+7XXXXXXXXXX), который будет привязан к заявке #{req_id}. Таймер — 3 минуты.",
+                f"📱 Укажите номер РФ (+7XXXXXXXXXX), который будет привязан к заявке <code>#{req_id}</code>. Таймер — 3 минуты.",
                 reply_markup=cancel_keyboard(req_id)
             )
             asyncio.create_task(timeout_request(req_id, message.from_user.id))
@@ -354,14 +354,14 @@ async def menu_handler(message: types.Message):
         f"\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"\n"
-        f"👤 ID: {user_id}\n"
-        f"💳 Баланс: {user['balance']:.2f} USDT\n"
+        f"👤 ID: <code>{user_id}</code>\n"
+        f"💳 Баланс: <code>{user['balance']:.2f}</code> USDT\n"
         f"\n"
         f"📊 Ваша статистика:\n"
-        f"💰 Заработано сегодня: {user['today_earn']:.2f} USDT\n"
-        f"📱 Всего сдано номеров: {submitted}\n"
-        f"✅ Всего оплачено: {paid}\n"
-        f"📈 Конверсия успеха: {conversion}%\n"
+        f"💰 Заработано сегодня: <code>{user['today_earn']:.2f}</code> USDT\n"
+        f"📱 Всего сдано номеров: <code>{submitted}</code>\n"
+        f"✅ Всего оплачено: <code>{paid}</code>\n"
+        f"📈 Конверсия успеха: <code>{conversion}%</code>\n"
         f"\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"\n"
@@ -376,11 +376,11 @@ async def withdraw_start(callback: types.CallbackQuery):
     user = await db.fetchrow("SELECT balance FROM users WHERE user_id = $1", callback.from_user.id)
 
     if user["balance"] <= 0:
-        await callback.answer("Ваш баланс пуст", show_alert=True)
+        await callback.answer("💳 Ваш баланс пуст", show_alert=True)
         return
 
     await callback.message.answer(
-        "Укажите сумму для вывода в USDT (минимум 1 USDT).\n"
+        "💳 Укажите сумму для вывода в USDT (минимум <code>1</code> USDT).\n"
         "Средства поступят на ваш кошелёк моментально."
     )
     await callback.answer()
@@ -400,17 +400,17 @@ async def handle_withdraw_amount(message: types.Message):
         return
 
     if amount < 1:
-        await message.answer("Минимальная сумма вывода — 1 USDT!")
+        await message.answer("⚠️ Минимальная сумма вывода — <code>1</code> USDT!")
         return
 
     if amount > user["balance"]:
-        await message.answer("Недостаточно средств на балансе.")
+        await message.answer("⚠️ Недостаточно средств на балансе.")
         return
 
     bot_balance = await crypto_get_balance()
     if bot_balance < amount:
         await message.answer(
-            "Баланс бота меньше вашей суммы вывода. "
+            "⚠️ Баланс бота меньше вашей суммы вывода. "
             "Подождите, пока администратор пополнит казну (не более 10 минут), "
             "после чего можете повторить запрос!"
         )
@@ -423,10 +423,10 @@ async def handle_withdraw_amount(message: types.Message):
         await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
 
         await message.answer(
-            f"✅ Вывод на {amount:.2f} USDT успешно выполнен. Средства зачислены на ваш кошелёк."
+            f"✅ Вывод на <code>{amount:.2f}</code> USDT успешно выполнен. Средства зачислены на ваш кошелёк."
         )
     except Exception as e:
-        await message.answer(f"Ошибка при выводе: {e}")
+        await message.answer(f"❌ Ошибка при выводе: {e}")
 
 
 # ================= /help =================
@@ -434,9 +434,9 @@ async def handle_withdraw_amount(message: types.Message):
 @require_approved_group
 async def cmd_help(message: types.Message):
     text = (
-        "Доступные команды:\n\n"
-        "/code — создать заявку CODE (4.20$)\n"
-        "/qr — создать заявку QR (4.50$)\n"
+        "📋 Доступные команды:\n\n"
+        "/code — создать заявку CODE (<code>4.20$</code>)\n"
+        "/qr — создать заявку QR (<code>4.50$</code>)\n"
         "/set сумма — пополнить баланс бота через инвойс\n"
         "/state — статистика за сегодня + баланс бота\n"
         "/reset user_id — обнулить профиль пользователя\n"
@@ -468,7 +468,7 @@ async def cmd_set(message: types.Message):
     try:
         result = await crypto_create_invoice(amount, "Пополнение баланса бота MAXup")
         await message.reply(
-            f"Счёт на {amount} USDT создан.\n"
+            f"🏦 Счёт на <code>{amount}</code> USDT создан.\n"
             f"Оплатите по ссылке:\n"
             f"{result['pay_url']}"
         )
@@ -479,7 +479,7 @@ async def cmd_set(message: types.Message):
             amount
         ))
     except Exception as e:
-        await message.reply(f"Ошибка при создании счёта: {e}")
+        await message.reply(f"❌ Ошибка при создании счёта: {e}")
 
 
 # ================= /setup =================
@@ -498,7 +498,7 @@ async def cmd_setup(message: types.Message):
         return
 
     await db.execute("INSERT INTO groups (group_id, approved) VALUES ($1, TRUE) ON CONFLICT (group_id) DO UPDATE SET approved = TRUE", group_id)
-    await message.answer(f"Группа {group_id} одобрена")
+    await message.answer(f"Группа <code>{group_id}</code> одобрена")
 
 
 # ================= /reset =================
@@ -522,7 +522,7 @@ async def cmd_reset(message: types.Message):
         WHERE user_id = $1
     """, user_id)
 
-    await message.reply(f"Профиль пользователя {user_id} обнулён.")
+    await message.reply(f"🗑 Профиль пользователя <code>{user_id}</code> обнулён.")
 
 
 # ================= /delcheck =================
@@ -542,9 +542,9 @@ async def cmd_delcheck(message: types.Message):
 
     try:
         await crypto_delete_check(check_id)
-        await message.reply(f"Чек {check_id} удалён. Средства возвращены на баланс бота.")
+        await message.reply(f"🗑 Чек <code>{check_id}</code> удалён. Средства возвращены на баланс бота.")
     except Exception as e:
-        await message.reply(f"Ошибка при удалении чека: {e}")
+        await message.reply(f"❌ Ошибка при удалении чека: {e}")
 
 
 # ================= /state =================
@@ -578,13 +578,13 @@ async def cmd_state(message: types.Message):
     crypto_balance = await crypto_get_balance()
 
     text = (
-        f"📊 Статистика за сегодня ({today_str}):\n"
-        f"👥 Пользователей: {users_count}\n"
-        f"✅ Встало: {stood}\n"
-        f"❌ Ошибок: {errors}\n"
-        f"⏱ Слетов: {slips}\n"
-        f"💰 Выплачено: {total_earn:.2f} USDT\n"
-        f"🏦 Баланс бота: {crypto_balance:.2f} USDT"
+        f"📊 Статистика за сегодня (<code>{today_str}</code>):\n"
+        f"👥 Пользователей: <code>{users_count}</code>\n"
+        f"✅ Встало: <code>{stood}</code>\n"
+        f"❌ Ошибок: <code>{errors}</code>\n"
+        f"⏱ Слетов: <code>{slips}</code>\n"
+        f"💰 Выплачено: <code>{total_earn:.2f}</code> USDT\n"
+        f"🏦 Баланс бота: <code>{crypto_balance:.2f}</code> USDT"
     )
 
     builder = InlineKeyboardBuilder()
@@ -647,13 +647,13 @@ async def cmd_code(message: types.Message):
 
     sent = await bot.send_message(
         CHANNEL_ID,
-        f"<b>Срочно нужен номер!</b>\n"
-        f"Формат запроса: CODE\n"
-        f"Кто первый нажмёт, того и заявка.",
+        f"📨 <b>Срочно нужен номер!</b>\n"
+        f"📋 Формат запроса: CODE\n"
+        f"⚡ Кто первый нажмёт, того и заявка.",
         reply_markup=request_keyboard(req_id)
     )
 
-    reply_msg = await message.reply(f"Заявка #{req_id} создана, ожидайте принятия")
+    reply_msg = await message.reply(f"📨 Заявка <code>#{req_id}</code> создана, ожидайте принятия")
 
     await db.execute(
         "UPDATE requests SET channel_msg_id = $1, support_chat_id = $2, support_msg_id = $3 WHERE id = $4",
@@ -670,13 +670,13 @@ async def cmd_qr(message: types.Message):
 
     sent = await bot.send_message(
         CHANNEL_ID,
-        f"<b>Срочно нужен номер!</b>\n"
-        f"Формат запроса: QR\n"
-        f"Кто первый нажмёт, того и заявка.",
+        f"📨 <b>Срочно нужен номер!</b>\n"
+        f"📋 Формат запроса: QR\n"
+        f"⚡ Кто первый нажмёт, того и заявка.",
         reply_markup=request_keyboard(req_id)
     )
 
-    reply_msg = await message.reply(f"Заявка #{req_id} создана, ожидайте принятия")
+    reply_msg = await message.reply(f"📨 Заявка <code>#{req_id}</code> создана, ожидайте принятия")
 
     await db.execute(
         "UPDATE requests SET channel_msg_id = $1, support_chat_id = $2, support_msg_id = $3 WHERE id = $4",
@@ -702,7 +702,7 @@ async def handle_qr_photo(message: types.Message):
             await db.execute("UPDATE requests SET number = 'QR', sms_requested = TRUE WHERE id = $1", req_id)
 
             await message.reply(
-                f"Заявка #{req_id}\nQR отправлен",
+                f"✉️ Заявка <code>#{req_id}</code>\nQR отправлен",
                 reply_markup=service_keyboard(req_id)
             )
 
@@ -710,7 +710,7 @@ async def handle_qr_photo(message: types.Message):
                 await bot.send_photo(
                     req["taken_by"],
                     file_id,
-                    caption=f"Ваш QR для авторизации:\n\nНа сканирование данного QR у вас ровно две минуты, после чего он истечет.",
+                    caption=f"📱 Ваш QR для авторизации:\n\nНа сканирование данного QR у вас ровно две минуты, после чего он истечет.",
                     reply_markup=cancel_keyboard(req_id)
                 )
             except:
@@ -724,7 +724,7 @@ async def handle_qr_photo(message: types.Message):
     """, message.chat.id)
 
     if req:
-        await message.reply("Для прикрепления QR отправьте его ответом на сообщение с просьбой прикрепить QR!")
+        await message.reply("⚠️ Для прикрепления QR отправьте его ответом на сообщение с просьбой прикрепить QR!")
 
 
 # ================= TIMEOUT (CODE only) =================
@@ -739,11 +739,11 @@ async def timeout_request(req_id: int, user_id: int):
     await db.execute("UPDATE users SET active_code_request = NULL WHERE user_id = $1", user_id)
 
     try:
-        await bot.send_message(user_id, f"Время вышло, заявка #{req_id} аннулирована.")
+        await bot.send_message(user_id, f"🕐 Время вышло, заявка <code>#{req_id}</code> аннулирована.")
     except:
         pass
 
-    await notify_group(req_id, f"Заявка #{req_id} отменена по таймауту.")
+    await notify_group(req_id, f"🕐 Заявка <code>#{req_id}</code> отменена по таймауту.")
 
 
 # ================= CANCEL =================
@@ -766,12 +766,12 @@ async def cancel_request(callback: types.CallbackQuery):
 
     if callback.message.chat.type in ("group", "supergroup"):
         try:
-            await bot.send_message(req["taken_by"], "Ваша заявка была отклонена администрацией.")
+            await bot.send_message(req["taken_by"], "❌ Ваша заявка была отклонена администрацией.")
         except:
             pass
-        await callback.message.edit_text(f"Заявка #{req_id} отменена администратором.", reply_markup=None)
+        await callback.message.edit_text(f"❌ Заявка <code>#{req_id}</code> отменена администратором.", reply_markup=None)
     else:
-        await notify_group(req_id, f"Заявка #{req_id} отменена пользователем.")
+        await notify_group(req_id, f"❌ Заявка <code>#{req_id}</code> отменена пользователем.")
         await callback.message.delete()
 
     await callback.answer()
@@ -791,41 +791,41 @@ async def handle_message(message: types.Message):
             text = message.text.strip()
 
             if text == "Меню":
-                await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+                await message.answer("⚠️ Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
                 return
 
             if not re.fullmatch(r"(\+7\d{10}|8\d{10}|9\d{9})", text):
-                await message.answer("Неверный формат номера. Отправьте номер в формате +7XXXXXXXXXX, 8XXXXXXXXXX или 9XXXXXXXXX.")
+                await message.answer("⚠️ Неверный формат номера. Отправьте номер в формате <code>+7XXXXXXXXXX</code>, <code>8XXXXXXXXXX</code> или <code>9XXXXXXXXX</code>.")
                 return
 
             await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
 
             await message.answer(
-                f"Номер <code>{text}</code> принят в обработку!\n"
+                f"📱 Номер <code>{text}</code> принят в обработку!\n"
                 f"Ожидайте поступления смс (не более 2-х минут)."
             )
 
-            await notify_group(req_id, f"Номер — <code>{text}</code>", sms_request_keyboard(req_id))
+            await notify_group(req_id, f"📱 Номер — <code>{text}</code>", sms_request_keyboard(req_id))
             return
 
         if req["status"] == "number_submitted" and req["sms_requested"]:
             sms = message.text.strip()
 
             if sms == "Меню":
-                await message.answer("Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+                await message.answer("⚠️ Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
                 return
 
             if not re.fullmatch(r"\d{6}", sms):
-                await message.answer("Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")
+                await message.answer("⚠️ Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")
                 return
 
             await db.execute("UPDATE requests SET sms_code = $1, status = 'sms_submitted' WHERE id = $2", sms, req_id)
 
             await message.answer(
-                f"Номер {req['number']} принят в обработку, ожидайте подтверждения от бота."
+                f"✉️ Номер <code>{req['number']}</code> принят в обработку, ожидайте подтверждения от бота."
             )
 
-            await notify_group(req_id, f"СМС-код — <code>{sms}</code>", service_keyboard(req_id))
+            await notify_group(req_id, f"✉️ СМС-код — <code>{sms}</code>", service_keyboard(req_id))
 
 
 # ================= SMS REQUEST =================
@@ -843,14 +843,14 @@ async def request_sms(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"На номер {req['number']} было отослано СМС, отправьте его ниже!"
+            f"💬 На номер <code>{req['number']}</code> было отослано СМС, отправьте его ниже!"
         )
     except:
         pass
 
     await callback.answer("СМС запрошено")
     await callback.message.edit_text(
-        callback.message.text + "\n\nСМС запрошено у пользователя.",
+        callback.message.text + "\n\n💬 СМС запрошено у пользователя.",
         reply_markup=None
     )
 
@@ -888,7 +888,7 @@ async def accept_number(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"Номер {req['number']} принят в работу! По истечению холда (5 минут) средства будут зачислены на ваш баланс."
+            f"✅ Номер <code>{req['number']}</code> принят в работу! По истечению холда (5 минут) средства будут зачислены на ваш баланс."
         )
     except:
         pass
@@ -918,7 +918,7 @@ async def process_payout(req_id: int, user_id: int, amount: float):
             try:
                 await bot.send_message(
                     user_id,
-                    f"На ваш баланс успешно зачислено {amount:.2f} USDT, спасибо за работу!"
+                    f"💰 На ваш баланс успешно зачислено <code>{amount:.2f}</code> USDT, спасибо за работу!"
                 )
             except:
                 pass
@@ -948,12 +948,12 @@ async def error_number(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"Номер {req['number']} не встал, произошла непредвиденная ошибка. Повторите попытку позже."
+            f"❌ Номер <code>{req['number']}</code> не встал, произошла непредвиденная ошибка. Повторите попытку позже."
         )
     except:
         pass
 
-    await callback.message.reply(f"Номер {req['number']} больше неактивен, подайте новую заявку.")
+    await callback.message.reply(f"❌ Номер <code>{req['number']}</code> больше неактивен, подайте новую заявку.")
     await callback.answer("Ошибка")
 
 
@@ -985,12 +985,12 @@ async def slip_number(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             req["taken_by"],
-            f"Номер {req['number']} внезапно слетел. Ожидайте новую заявку!"
+            f"⏱ Номер <code>{req['number']}</code> внезапно слетел. Ожидайте новую заявку!"
         )
     except:
         pass
 
-    await callback.message.reply(f"Номер {req['number']} больше неактивен, подайте новую заявку.")
+    await callback.message.reply(f"⏱ Номер <code>{req['number']}</code> больше неактивен, подайте новую заявку.")
     await callback.answer("Слет")
 
 

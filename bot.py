@@ -136,8 +136,7 @@ async def crypto_transfer(amount: float, user_id: int, spend_id: str) -> dict:
         "asset": "USDT",
         "amount": str(amount),
         "user_id": user_id,
-        "spend_id": spend_id,
-        "comment": "Выплата от MAXup"
+        "spend_id": spend_id
     })
 
 
@@ -402,7 +401,6 @@ async def handle_withdraw_amount(message: types.Message):
         await message.answer("Недостаточно средств на балансе.")
         return
 
-    # Проверяем баланс бота
     bot_balance = await crypto_get_balance()
     if bot_balance < amount:
         await message.answer(
@@ -416,7 +414,6 @@ async def handle_withdraw_amount(message: types.Message):
         spend_id = f"wd_{message.from_user.id}_{int(datetime.now().timestamp())}"
         await crypto_transfer(amount, message.from_user.id, spend_id)
 
-        # Списываем только после успешного перевода
         await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
 
         await message.answer(
@@ -469,7 +466,6 @@ async def cmd_set(message: types.Message):
             f"Оплатите по ссылке:\n"
             f"{result['pay_url']}"
         )
-        # Запускаем фоновую проверку оплаты
         asyncio.create_task(check_invoice_status(
             result["invoice_id"],
             message.chat.id,
@@ -988,6 +984,6 @@ async def main():
     finally:
         await http_client.aclose()
 
-#оыо
+
 if __name__ == "__main__":
     asyncio.run(main())

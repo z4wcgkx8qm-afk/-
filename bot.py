@@ -497,53 +497,41 @@ async def cmd_qr(message: types.Message):
     )
 
 
-# ================= QR PHOTO HANDLER =================
+# ================= QR PHOTO HANDLER (единый) =================
 @dp.message(F.photo, F.chat.type.in_(["group", "supergroup"]))
 async def handle_qr_photo(message: types.Message):
-    # Проверка: фото должно быть ответом на сообщение с qr_await_msg_id
-    if not message.reply_to_message:
-        return
-
-    replied_msg_id = message.reply_to_message.message_id
-
-    req = await db.fetchrow("""
-        SELECT * FROM requests
-        WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND qr_await_msg_id = $1
-    """, replied_msg_id)
-
-    if not req:
-        return
-
-    req_id = req["id"]
-    file_id = message.photo[-1].file_id
-
-    await db.execute("UPDATE requests SET number = 'QR', sms_requested = TRUE WHERE id = $1", req_id)
-
-    await message.reply(
-        f"Заявка #{req_id}\nQR отправлен",
-        reply_markup=service_keyboard(req_id)
-    )
-
-    try:
-        await bot.send_photo(
-            req["taken_by"],
-            file_id,
-            caption=f"Ваш QR для авторизации:\n\nНа сканирование данного QR у вас ровно две минуты, после чего он истечет.",
-            reply_markup=cancel_keyboard(req_id)
-        )
-    except:
-        pass
-
-
-# ================= QR NOT REPLY WARNING =================
-@dp.message(F.photo, F.chat.type.in_(["group", "supergroup"]))
-async def handle_qr_not_reply(message: types.Message):
-    # Предупреждение если фото не ответом
+    # Проверка: фото ответом на сообщение с qr_await_msg_id
     if message.reply_to_message:
-        # Уже обработано в handle_qr_photo или не QR
-        return
+        replied_msg_id = message.reply_to_message.message_id
 
-    # Проверяем, есть ли в этом чате ожидающая QR заявка
+        req = await db.fetchrow("""
+            SELECT * FROM requests
+            WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND qr_await_msg_id = $1
+        """, replied_msg_id)
+
+        if req:
+            req_id = req["id"]
+            file_id = message.photo[-1].file_id
+
+            await db.execute("UPDATE requests SET number = 'QR', sms_requested = TRUE WHERE id = $1", req_id)
+
+            await message.reply(
+                f"Заявка #{req_id}\nQR отправлен",
+                reply_markup=service_keyboard(req_id)
+            )
+
+            try:
+                await bot.send_photo(
+                    req["taken_by"],
+                    file_id,
+                    caption=f"Ваш QR для авторизации:\n\nНа сканирование данного QR у вас ровно две минуты, после чего он истечет.",
+                    reply_markup=cancel_keyboard(req_id)
+                )
+            except:
+                pass
+            return
+
+    # Фото не ответом — проверяем, есть ли ожидающая QR заявка в этом чате
     req = await db.fetchrow("""
         SELECT id FROM requests
         WHERE format = 'QR' AND status = 'taken' AND sms_requested = FALSE AND support_chat_id = $1

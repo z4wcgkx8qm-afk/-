@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import asyncpg
@@ -113,9 +114,7 @@ async def init_db():
 async def crypto_request(method: str, params: dict = None) -> dict:
     headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
     url = f"{CRYPTO_API}/{method}"
-    print(f"Crypto API запрос: {method}, params={params}")
     resp = await http_client.post(url, headers=headers, json=params or {})
-    print(f"Crypto API ответ: {resp.status_code}, body={resp.text[:500]}")
     resp.raise_for_status()
     data = resp.json()
     if not data.get("ok"):
@@ -170,6 +169,16 @@ async def notify_group(req_id: int, text: str, reply_markup=None):
         )
     except:
         pass
+
+
+def require_approved_group(func):
+    async def wrapper(message: types.Message):
+        if message.chat.type == "private":
+            return
+        if not await is_approved_group(message.chat.id):
+            return
+        return await func(message)
+    return wrapper
 
 
 # ================= KEYBOARDS =================
@@ -393,42 +402,50 @@ async def handle_withdraw_amount(message: types.Message):
         await message.answer(f"Ошибка при создании чека: {e}")
 
 
+# ================= /help =================
+@dp.message(Command("help"))
+@require_approved_group
+async def cmd_help(message: types.Message):
+    text = (
+        "Доступные команды:\n\n"
+        "/code — создать заявку CODE (4.20$)\n"
+        "/qr — создать заявку QR (4.50$)\n"
+        "/set сумма — пополнить баланс бота через инвойс\n"
+        "/state — статистика за сегодня + баланс бота\n"
+        "/reset user_id — обнулить профиль пользователя\n"
+        "/help — список команд"
+    )
+    await message.reply(text)
+
+
 # ================= /set =================
 @dp.message(Command("set"))
+@require_approved_group
 async def cmd_set(message: types.Message):
-    print(f"/set вызван от {message.from_user.id}, ADMIN_ID={ADMIN_ID}")
-
-    if message.from_user.id != ADMIN_ID:
-        print(f"Отказано: {message.from_user.id} != {ADMIN_ID}")
-        return
-
     args = message.text.split()
     if len(args) != 2:
-        await message.answer("Использование: /set сумма")
+        await message.reply("Использование: /set сумма")
         return
 
     try:
         amount = float(args[1].replace(",", "."))
     except ValueError:
-        await message.answer("Неверная сумма")
+        await message.reply("Неверная сумма")
         return
 
     if amount <= 0:
-        await message.answer("Сумма должна быть больше нуля")
+        await message.reply("Сумма должна быть больше нуля")
         return
 
     try:
-        print(f"Создаю инвойс на {amount} USDT...")
         result = await crypto_create_invoice(amount, "Пополнение баланса бота MAXup")
-        print(f"Инвойс создан: {result}")
-        await message.answer(
+        await message.reply(
             f"Счёт на {amount} USDT создан.\n"
             f"Оплатите по ссылке:\n"
-            f"{result.get('pay_url', result.get('bot_invoice_url', 'нет ссылки'))}"
+            f"{result['pay_url']}"
         )
     except Exception as e:
-        print(f"Ошибка создания инвойса: {e}")
-        await message.answer(f"Ошибка при создании счёта: {e}")
+        await message.reply(f"Ошибка при создании счёта: {e}")
 
 
 # ================= /setup =================
@@ -452,10 +469,8 @@ async def cmd_setup(message: types.Message):
 
 # ================= /reset =================
 @dp.message(Command("reset"))
+@require_approved_group
 async def cmd_reset(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
     args = message.text.split()
     if len(args) != 2:
         await message.reply("Использование: /reset user_id")
@@ -478,16 +493,8 @@ async def cmd_reset(message: types.Message):
 
 # ================= /state =================
 @dp.message(Command("state"))
+@require_approved_group
 async def cmd_state(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    if message.chat.type == "private":
-        return
-
-    if not await is_approved_group(message.chat.id):
-        return
-
     msk_now = datetime.now(MSK)
     today_str = msk_now.strftime("%d.%m")
 
@@ -532,10 +539,6 @@ async def cmd_state(message: types.Message):
 
 @dp.callback_query(F.data == "state_report")
 async def state_report(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-
     msk_now = datetime.now(MSK)
 
     rows = await db.fetch("""
@@ -581,13 +584,8 @@ async def state_report(callback: types.CallbackQuery):
 
 # ================= /code =================
 @dp.message(Command("code"))
+@require_approved_group
 async def cmd_code(message: types.Message):
-    if message.chat.type == "private":
-        return
-
-    if not await is_approved_group(message.chat.id):
-        return
-
     req = await db.fetchrow("INSERT INTO requests (format, status) VALUES ('CODE', 'open') RETURNING id")
     req_id = req["id"]
 
@@ -609,13 +607,8 @@ async def cmd_code(message: types.Message):
 
 # ================= /qr =================
 @dp.message(Command("qr"))
+@require_approved_group
 async def cmd_qr(message: types.Message):
-    if message.chat.type == "private":
-        return
-
-    if not await is_approved_group(message.chat.id):
-        return
-
     req = await db.fetchrow("INSERT INTO requests (format, status) VALUES ('QR', 'open') RETURNING id")
     req_id = req["id"]
 

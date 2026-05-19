@@ -53,6 +53,7 @@ async def init_db():
             total_paid INT DEFAULT 0,
             active_code_request INT,
             active_qr_request INT,
+            referrer_id BIGINT,
             last_earn_date DATE
         );
     """)
@@ -74,10 +75,20 @@ async def init_db():
         );
     """)
 
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS referrals (
+            referrer_id BIGINT,
+            invited_user_id BIGINT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (referrer_id, invited_user_id)
+        );
+    """)
+
     for table, cols in {
         "users": [
             ("last_earn_date", "DATE"),
             ("active_qr_request", "INT"),
+            ("referrer_id", "BIGINT"),
         ],
         "requests": [
             ("sms_code", "TEXT"),
@@ -254,6 +265,20 @@ def service_keyboard(req_id: int, accepted: bool = False, error_pressed: bool = 
     return builder.as_markup()
 
 
+def clink_stats_keyboard(ref_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="Показать пользователей", callback_data=f"ref_users_{ref_id}"))
+    builder.add(types.InlineKeyboardButton(text="Назад", callback_data=f"ref_back_{ref_id}"))
+    return builder.as_markup()
+
+
+def clink_back_keyboard(ref_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="Сбросить", callback_data=f"ref_reset_{ref_id}"))
+    builder.add(types.InlineKeyboardButton(text="Статистика", callback_data=f"ref_stats_{ref_id}"))
+    return builder.as_markup()
+
+
 # ================= /start =================
 @dp.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: types.Message):
@@ -261,6 +286,36 @@ async def cmd_start(message: types.Message):
 
     args = message.text.split()
 
+    # Реферальная ссылка
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            ref_id = int(args[1].split("_")[1])
+        except ValueError:
+            await message.answer("Неверная ссылка")
+            return
+
+        user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
+
+        # Проверяем, что пользователь не переходит по своей же ссылке
+        if message.from_user.id == ref_id:
+            await message.answer("Нельзя использовать собственную реферальную ссылку.")
+            return
+
+        # Проверяем, что реферер существует
+        ref_exists = await db.fetchval("SELECT user_id FROM users WHERE user_id = $1", ref_id)
+        if not ref_exists:
+            await message.answer("Реферальная ссылка недействительна.")
+            return
+
+        # Проверяем, что пользователь ещё не имеет реферера
+        if user["referrer_id"] is None:
+            await db.execute("UPDATE users SET referrer_id = $1 WHERE user_id = $2", ref_id, message.from_user.id)
+            try:
+                await db.execute("INSERT INTO referrals (referrer_id, invited_user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", ref_id, message.from_user.id)
+            except:
+                pass
+
+    # Заявка take_
     if len(args) > 1 and args[1].startswith("take_"):
         try:
             req_id = int(args[1].split("_")[1])
@@ -341,6 +396,7 @@ async def menu_handler(message: types.Message):
 
     user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
     user_id = user["user_id"]
+    referral_count = await db.fetchval("SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id)
 
     submitted = user["total_submitted"]
     paid = user["total_paid"]
@@ -356,6 +412,7 @@ async def menu_handler(message: types.Message):
         f"\n"
         f"👤 ID: <code>{user_id}</code>\n"
         f"💳 Баланс: <code>{user['balance']:.2f}</code> USDT\n"
+        f"👥 Приглашено: <code>{referral_count}</code>\n"
         f"\n"
         f"📊 Ваша статистика:\n"
         f"💰 Заработано сегодня: <code>{user['today_earn']:.2f}</code> USDT\n"
@@ -441,9 +498,119 @@ async def cmd_help(message: types.Message):
         "/state — статистика за сегодня + баланс бота\n"
         "/reset user_id — обнулить профиль пользователя\n"
         "/delcheck check_id — удалить чек и вернуть средства\n"
+        "/clink user_id — создать реферальную ссылку\n"
         "/help — список команд"
     )
     await message.reply(text)
+
+
+# ================= /clink =================
+@dp.message(Command("clink"))
+@require_approved_group
+async def cmd_clink(message: types.Message):
+    args = message.text.split()
+    if len(args) != 2:
+        await message.reply("Использование: /clink user_id")
+        return
+
+    try:
+        ref_id = int(args[1])
+    except ValueError:
+        await message.reply("Неверный user_id")
+        return
+
+    # Проверяем, существует ли пользователь
+    user_exists = await db.fetchval("SELECT user_id FROM users WHERE user_id = $1", ref_id)
+    if not user_exists:
+        await message.reply("Пользователь не найден. Он должен хотя бы раз запустить бота.")
+        return
+
+    # Проверяем, есть ли уже реферальная ссылка
+    ref_count = await db.fetchval("SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", ref_id)
+
+    if ref_count > 0:
+        await message.reply(
+            f"У пользователя <code>{ref_id}</code> уже есть реферальная ссылка.",
+            reply_markup=clink_back_keyboard(ref_id)
+        )
+        return
+
+    # Создаём ссылку
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{ref_id}"
+    await message.reply(
+        f"Реферальная ссылка для пользователя <code>{ref_id}</code> создана:\n{ref_link}"
+    )
+
+
+# ================= CLINK CALLBACKS =================
+@dp.callback_query(F.data.startswith("ref_stats_"))
+async def ref_stats(callback: types.CallbackQuery):
+    ref_id = int(callback.data.split("_")[2])
+    count = await db.fetchval("SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", ref_id)
+    await callback.message.edit_text(
+        f"По ссылке пользователя <code>{ref_id}</code> перешло: <code>{count}</code> человек.",
+        reply_markup=clink_stats_keyboard(ref_id)
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ref_users_"))
+async def ref_users(callback: types.CallbackQuery):
+    ref_id = int(callback.data.split("_")[2])
+    rows = await db.fetch("""
+        SELECT u.user_id FROM referrals r
+        JOIN users u ON u.user_id = r.invited_user_id
+        WHERE r.referrer_id = $1
+    """, ref_id)
+
+    if not rows:
+        await callback.answer("Нет приглашённых пользователей", show_alert=True)
+        return
+
+    lines = []
+    for row in rows:
+        uid = row["user_id"]
+        try:
+            chat = await bot.get_chat(uid)
+            name = f"@{chat.username}" if chat.username else f"ID:<code>{uid}</code>"
+        except:
+            name = f"ID:<code>{uid}</code>"
+        lines.append(name)
+
+    text = "Приглашённые пользователи:\n" + "\n".join(lines)
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="Назад", callback_data=f"ref_back_{ref_id}"))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ref_back_"))
+async def ref_back(callback: types.CallbackQuery):
+    ref_id = int(callback.data.split("_")[2])
+    ref_count = await db.fetchval("SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", ref_id)
+    if ref_count > 0:
+        await callback.message.edit_text(
+            f"У пользователя <code>{ref_id}</code> уже есть реферальная ссылка.",
+            reply_markup=clink_back_keyboard(ref_id)
+        )
+    else:
+        await callback.message.edit_text(
+            f"У пользователя <code>{ref_id}</code> нет активной реферальной ссылки."
+        )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ref_reset_"))
+async def ref_reset(callback: types.CallbackQuery):
+    ref_id = int(callback.data.split("_")[2])
+    await db.execute("DELETE FROM referrals WHERE referrer_id = $1", ref_id)
+    await db.execute("UPDATE users SET referrer_id = NULL WHERE referrer_id = $1", ref_id)
+    await callback.message.edit_text(
+        f"Реферальная ссылка пользователя <code>{ref_id}</code> сброшена. Статистика сохранена."
+    )
+    await callback.answer()
 
 
 # ================= /set =================

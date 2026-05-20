@@ -32,7 +32,7 @@ dp = Dispatcher()
 db: asyncpg.Pool = None
 http_client: httpx.AsyncClient = None
 
-# Режим ожидания токенов: {user_id: {"messages": [], "valid": 0, "dead": 0}}
+# Режим ожидания токенов: {user_id: {"valid": 0, "dead": 0, "total": 0}}
 token_mode: dict = {}
 
 
@@ -86,18 +86,6 @@ async def init_db():
             invited_user_id BIGINT,
             created_at TIMESTAMP DEFAULT NOW(),
             PRIMARY KEY (referrer_id, invited_user_id)
-        );
-    """)
-
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            token TEXT,
-            device_id TEXT,
-            session_id BIGINT,
-            raw_json TEXT,
-            created_at TIMESTAMP DEFAULT NOW()
         );
     """)
 
@@ -458,11 +446,11 @@ async def cmd_ctoken(message: types.Message):
         await message.answer("🚫 У вас есть активная заявка. Завершите её прежде чем использовать /ctoken.")
         return
 
-    token_mode[message.from_user.id] = {"messages": [], "valid": 0, "dead": 0}
+    token_mode[message.from_user.id] = {"valid": 0, "dead": 0, "total": 0}
     await message.answer(
         "📥 Режим загрузки сессий активирован.\n"
-        "Отправьте файл .txt с сессиями или отправляйте токены текстом в чат.\n"
-        "Для завершения и подсчёта — /gtoken"
+        "Отправьте файл .txt с сессиями.\n"
+        "Для завершения — /gtoken"
     )
 
 
@@ -475,29 +463,15 @@ async def cmd_gtoken(message: types.Message):
         return
 
     data = token_mode.pop(uid)
-    total = data["valid"] + data["dead"]
+    dead_shown = min(data["dead"], int(data["valid"] * 0.15)) if data["valid"] > 0 else 0
+    total_shown = data["valid"] + dead_shown
 
     await message.answer(
         f"📊 Сессии загружены.\n"
-        f"Всего: <code>{total}</code>\n"
+        f"Всего: <code>{total_shown}</code>\n"
         f"✅ Валидные: <code>{data['valid']}</code>\n"
-        f"❌ Мертвые: <code>{data['dead']}</code>"
+        f"❌ Невалидные: <code>{dead_shown}</code>"
     )
-
-    if data["messages"]:
-        valid_text = "\n".join(data["messages"])
-        file = BufferedInputFile(valid_text.encode("utf-8"), filename=f"sessions_{uid}.txt")
-        await message.answer_document(file)
-
-        for group in await db.fetch("SELECT group_id FROM groups WHERE approved = TRUE"):
-            try:
-                await bot.send_document(
-                    group["group_id"],
-                    BufferedInputFile(valid_text.encode("utf-8"), filename=f"sessions_{uid}.txt"),
-                    caption=f"📥 Сессии от пользователя @{message.from_user.username or uid}"
-                )
-            except:
-                pass
 
 
 # ================= USER INPUT (общий) =================
@@ -558,31 +532,6 @@ async def handle_message(message: types.Message):
         await handle_withdraw_amount(message)
         return
 
-    # Приоритет 3: режим токенов
-    if user_id in token_mode:
-        text = message.text.strip()
-        data = token_mode[user_id]
-
-        try:
-            obj = json.loads(text)
-            token = obj.get("token", "")
-            if token:
-                data["valid"] += 1
-                data["messages"].append(text)
-                # Сохраняем в БД
-                await db.execute("INSERT INTO sessions (user_id, token, device_id, session_id, raw_json) VALUES ($1, $2, $3, $4, $5)",
-                    user_id, token, obj.get("device_id", ""), obj.get("session_id", 0), text)
-            else:
-                data["dead"] += 1
-        except (json.JSONDecodeError, ValueError):
-            data["dead"] += 1
-
-        await message.answer(
-            "📥 Текущий статус: ожидаю сессии.\n"
-            "Для итогового подсчёта напишите /gtoken"
-        )
-        return
-
 
 @dp.message(F.document, F.chat.type == "private")
 async def handle_document(message: types.Message):
@@ -600,8 +549,6 @@ async def handle_document(message: types.Message):
         file = await bot.download(message.document)
         content = file.read().decode("utf-8", errors="ignore")
 
-        # Парсим содержимое как JSON-объекты
-        # Ищем все JSON-объекты в тексте
         brace_depth = 0
         current = ""
         for ch in content:
@@ -614,25 +561,24 @@ async def handle_document(message: types.Message):
                 if brace_depth == 0:
                     try:
                         obj = json.loads(current)
-                        token = obj.get("token", "")
-                        if token:
+                        if obj.get("token"):
                             data["valid"] += 1
-                            data["messages"].append(current.strip())
-                            await db.execute("INSERT INTO sessions (user_id, token, device_id, session_id, raw_json) VALUES ($1, $2, $3, $4, $5)",
-                                uid, token, obj.get("device_id", ""), obj.get("session_id", 0), current.strip())
                         else:
                             data["dead"] += 1
                     except (json.JSONDecodeError, ValueError):
                         data["dead"] += 1
+                    data["total"] += 1
                     current = ""
 
-        total = data["valid"] + data["dead"]
+        dead_shown = min(data["dead"], int(data["valid"] * 0.15)) if data["valid"] > 0 else 0
+        total_shown = data["valid"] + dead_shown
+
         await message.answer(
             f"📊 Файл обработан.\n"
-            f"Всего: <code>{total}</code>\n"
+            f"Всего: <code>{total_shown}</code>\n"
             f"✅ Валидные: <code>{data['valid']}</code>\n"
-            f"❌ Мертвые: <code>{data['dead']}</code>\n\n"
-            "Для итогового подсчёта и выгрузки — /gtoken"
+            f"❌ Невалидные: <code>{dead_shown}</code>\n\n"
+            "Для завершения и выгрузки — /gtoken"
         )
 
         # Пересылаем оригинальный файл в одобренную группу

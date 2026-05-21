@@ -33,11 +33,9 @@ def admin_keyboard(user_id: int):
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
 
-    # Админ — сразу доступ
     if user_id == ADMIN_ID:
         approved_users.add(user_id)
 
-    # Уже одобрен?
     if user_id in approved_users:
         text = (
             f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
@@ -49,12 +47,10 @@ async def cmd_start(message: types.Message):
         await message.answer(text, reply_markup=menu_keyboard())
         return
 
-    # Уже отправлена заявка?
     if user_id in pending_approvals:
         await message.answer('<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Ваша заявка уже отправлена на рассмотрение администрации, ожидайте подтверждения.')
         return
 
-    # Новая заявка
     pending_approvals[user_id] = True
 
     await message.answer('<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Ваша заявка отправлена на рассмотрение администрации, ожидайте подтверждения.')
@@ -75,8 +71,8 @@ async def approve_user(callback: types.CallbackQuery):
     approved_users.add(user_id)
     pending_approvals.pop(user_id, None)
 
-    await callback.message.edit_text("Одобрено ✅")
-    await callback.answer()
+    await callback.message.delete()
+    await callback.answer("Заявка одобрена", show_alert=True)
 
     try:
         await bot.send_message(
@@ -92,8 +88,8 @@ async def reject_user(callback: types.CallbackQuery):
 
     pending_approvals.pop(user_id, None)
 
-    await callback.message.edit_text("Отклонено ❌")
-    await callback.answer()
+    await callback.message.delete()
+    await callback.answer("Заявка отклонена", show_alert=True)
 
     try:
         await bot.send_message(

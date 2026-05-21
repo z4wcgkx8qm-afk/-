@@ -113,12 +113,12 @@ async def archive_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "my_stats")
 async def my_stats(callback: types.CallbackQuery):
     text = (
-        '<tg-emoji emoji-id="5298668674532538341">👥️</tg-emoji> Моя статистика:\n\n'
-        '<tg-emoji emoji-id="5206401524200145033">🔼</tg-emoji> Сдано номеров: <code>0</code>\n'
-        '<tg-emoji emoji-id="5276412364458059956">🕓</tg-emoji> Выдано сегодня: <code>0</code>\n'
-        '<tg-emoji emoji-id="5206222720416643915">🔔</tg-emoji> Успешно засчитано: <code>0</code>\n'
-        '<tg-emoji emoji-id="5206510891247371052">🔽</tg-emoji> Всего слетов: <code>0</code>\n\n'
-        '<tg-emoji emoji-id="5276398496008663230">👝</tg-emoji> Заработано за всё время: <code>0.00$</code>'
+        '<tg-emoji emoji-id="5298668674532538341">👥️</tg-emoji> Моя статистика:\n'
+        '<blockquote>┌ Сдано номеров: <code>0</code>\n'
+        '├ Выдано сегодня: <code>0</code>\n'
+        '├ Успешно засчитано: <code>0</code>\n'
+        '├ Всего слетов: <code>0</code>\n'
+        '└ Заработано за всё время: <code>0.00$</code></blockquote>'
     )
     builder = InlineKeyboardBuilder()
     builder.add(types.InlineKeyboardButton(text="Назад", callback_data="archive"))
@@ -128,14 +128,14 @@ async def my_stats(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "global_stats")
 async def global_stats(callback: types.CallbackQuery):
     text = (
-        '<tg-emoji emoji-id="5298668674532538341">👥️</tg-emoji> Общая статистика бота:\n\n'
-        '<tg-emoji emoji-id="5278778882848220741">📊</tg-emoji> Зарегистрировано: <code>0</code>\n'
-        '<tg-emoji emoji-id="5206401524200145033">🔼</tg-emoji> Всего сдано номеров: <code>0</code>\n'
-        '<tg-emoji emoji-id="5276412364458059956">🕓</tg-emoji> Выдано сегодня: <code>0</code>\n'
-        '<tg-emoji emoji-id="5206222720416643915">🔔</tg-emoji> Успешно засчитано: <code>0</code>\n'
-        '<tg-emoji emoji-id="5206510891247371052">🔽</tg-emoji> Всего слетов: <code>0</code>\n\n'
-        '<tg-emoji emoji-id="5276398496008663230">👝</tg-emoji> Заработано дропами: <code>0.00$</code>\n'
-        '<tg-emoji emoji-id="5206476089127372379">⭐️</tg-emoji> Выплачено всего: <code>0.00$</code>'
+        '<tg-emoji emoji-id="5298668674532538341">👥️</tg-emoji> Общая статистика бота:\n'
+        '<blockquote>┌ Зарегистрировано: <code>0</code>\n'
+        '├ Всего сдано номеров: <code>0</code>\n'
+        '├ Выдано сегодня: <code>0</code>\n'
+        '├ Успешно засчитано: <code>0</code>\n'
+        '├ Всего слетов: <code>0</code>\n'
+        '├ Заработано дропами: <code>0.00$</code>\n'
+        '└ Выплачено всего: <code>0.00$</code></blockquote>'
     )
     builder = InlineKeyboardBuilder()
     builder.add(types.InlineKeyboardButton(text="Назад", callback_data="archive"))

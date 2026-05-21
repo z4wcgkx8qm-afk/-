@@ -29,6 +29,14 @@ def admin_keyboard(user_id: int):
     builder.add(types.InlineKeyboardButton(text="Запретить", callback_data=f"reject_{user_id}"))
     return builder.as_markup()
 
+def archive_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="Моя статистика", callback_data="my_stats"))
+    builder.add(types.InlineKeyboardButton(text="Общая статистика", callback_data="global_stats"))
+    builder.add(types.InlineKeyboardButton(text="Назад", callback_data="back_to_menu"))
+    builder.adjust(1)
+    return builder.as_markup()
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -67,35 +75,23 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data.startswith("approve_"))
 async def approve_user(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
-
     approved_users.add(user_id)
     pending_approvals.pop(user_id, None)
-
     await callback.message.delete()
     await callback.answer("Заявка одобрена", show_alert=True)
-
     try:
-        await bot.send_message(
-            user_id,
-            '<tg-emoji emoji-id="5278602437001767574">🔓</tg-emoji> Ваша заявка была успешно одобрена, для начала работы с ботом, пропишите /start'
-        )
+        await bot.send_message(user_id, '<tg-emoji emoji-id="5278602437001767574">🔓</tg-emoji> Ваша заявка была успешно одобрена, для начала работы с ботом, пропишите /start')
     except:
         pass
 
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_user(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
-
     pending_approvals.pop(user_id, None)
-
     await callback.message.delete()
     await callback.answer("Заявка отклонена", show_alert=True)
-
     try:
-        await bot.send_message(
-            user_id,
-            '<tg-emoji emoji-id="5278578973595427038">🚫</tg-emoji> Ваша заявка, к сожалению, отклонена. Свяжитесь с администратором для уточнения причины.'
-        )
+        await bot.send_message(user_id, '<tg-emoji emoji-id="5278578973595427038">🚫</tg-emoji> Ваша заявка, к сожалению, отклонена. Свяжитесь с администратором для уточнения причины.')
     except:
         pass
 
@@ -108,8 +104,31 @@ async def withdraw_stub(callback: types.CallbackQuery):
     await callback.answer("В разработке", show_alert=True)
 
 @dp.callback_query(F.data == "archive")
-async def archive_stub(callback: types.CallbackQuery):
+async def archive_menu(callback: types.CallbackQuery):
+    text = '<tg-emoji emoji-id="5278227821364275264">📁</tg-emoji> Архив данных\nВ данном разделе вы можете увидеть статистику бота за все время, выберите раздел:'
+    await callback.message.edit_text(text, reply_markup=archive_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data == "my_stats")
+async def my_stats_stub(callback: types.CallbackQuery):
     await callback.answer("В разработке", show_alert=True)
+
+@dp.callback_query(F.data == "global_stats")
+async def global_stats_stub(callback: types.CallbackQuery):
+    await callback.answer("В разработке", show_alert=True)
+
+@dp.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    text = (
+        f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
+        f'<blockquote>Ваш ID: <code>{user_id}</code>\n'
+        f'Сдано номеров за все время: <code>0</code>\n\n'
+        f'Баланс: <code>0.00$</code>\n'
+        f'Статус бота: В работе</blockquote>'
+    )
+    await callback.message.edit_text(text, reply_markup=menu_keyboard())
+    await callback.answer()
 
 async def main():
     await dp.start_polling(bot)

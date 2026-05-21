@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+PAYOUT_CHANNEL_URL = os.getenv("PAYOUT_CHANNEL_URL", "")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -19,8 +20,9 @@ def menu_keyboard():
     builder = InlineKeyboardBuilder()
     builder.add(types.InlineKeyboardButton(text="MAX-QR", callback_data="maxqr"))
     builder.add(types.InlineKeyboardButton(text="Вывести средства", callback_data="withdraw"))
+    builder.add(types.InlineKeyboardButton(text="Выплаты", url=PAYOUT_CHANNEL_URL))
     builder.add(types.InlineKeyboardButton(text="Архив", callback_data="archive"))
-    builder.adjust(2, 1)
+    builder.adjust(2, 2)
     return builder.as_markup()
 
 def admin_keyboard(user_id: int):

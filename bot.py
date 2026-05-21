@@ -46,11 +46,11 @@ async def cmd_start(message: types.Message):
 
     if user_id in approved_users:
         text = (
-            f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
-            f'<blockquote>Ваш ID: <code>{user_id}</code>\n'
-            f'Сдано номеров за все время: <code>0</code>\n\n'
-            f'Баланс: <code>0.00$</code>\n'
-            f'Статус бота: В работе</blockquote>'
+            f'<tg-emoji emoji-id="5276220667182736079">📥</tg-emoji> <b>Добро пожаловать в бота QR scan GOST!</b>\n\n'
+            f'<b>┌ Статус работы:</b> <tg-emoji emoji-id="5213147006561692829">🔛</tg-emoji> Активный\n'
+            f'<b>├ Актуальный прайс:</b> <code>4.4$</code>\n'
+            f'<b>└ Общая очередь:</b> <code>0</code>\n\n'
+            f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> <b>Выберите раздел для продолжения:</b>'
         )
         await message.answer(text, reply_markup=menu_keyboard())
         return
@@ -145,11 +145,11 @@ async def global_stats(callback: types.CallbackQuery):
 async def back_to_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     text = (
-        f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
-        f'<blockquote>Ваш ID: <code>{user_id}</code>\n'
-        f'Сдано номеров за все время: <code>0</code>\n\n'
-        f'Баланс: <code>0.00$</code>\n'
-        f'Статус бота: В работе</blockquote>'
+        f'<tg-emoji emoji-id="5276220667182736079">📥</tg-emoji> <b>Добро пожаловать в бота QR scan GOST!</b>\n\n'
+        f'<b>┌ Статус работы:</b> <tg-emoji emoji-id="5213147006561692829">🔛</tg-emoji> Активный\n'
+        f'<b>├ Актуальный прайс:</b> <code>4.4$</code>\n'
+        f'<b>└ Общая очередь:</b> <code>0</code>\n\n'
+        f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> <b>Выберите раздел для продолжения:</b>'
     )
     await callback.message.edit_text(text, reply_markup=menu_keyboard())
     await callback.answer()

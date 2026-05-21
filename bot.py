@@ -7,9 +7,14 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+
+# Храним заявки: {user_id: True}  (в будущем БД)
+pending_approvals = {}
+approved_users = set()
 
 def menu_keyboard():
     builder = InlineKeyboardBuilder()
@@ -19,17 +24,82 @@ def menu_keyboard():
     builder.adjust(2, 1)
     return builder.as_markup()
 
+def admin_keyboard(user_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="Одобрить", callback_data=f"approve_{user_id}"))
+    builder.add(types.InlineKeyboardButton(text="Запретить", callback_data=f"reject_{user_id}"))
+    return builder.as_markup()
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-    text = (
-        '<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
-        '<blockquote>Ваш ID: <code>{user_id}</code>\n'
-        'Сдано номеров за все время: <code>0</code>\n\n'
-        'Баланс: <code>0.00$</code>\n'
-        'Статус бота: В работе</blockquote>'
-    )
-    await message.answer(text, reply_markup=menu_keyboard())
+
+    # Проверка: уже одобрен?
+    if user_id in approved_users:
+        text = (
+            f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
+            f'<blockquote>Ваш ID: <code>{user_id}</code>\n'
+            f'Сдано номеров за все время: <code>0</code>\n\n'
+            f'Баланс: <code>0.00$</code>\n'
+            f'Статус бота: В работе</blockquote>'
+        )
+        await message.answer(text, reply_markup=menu_keyboard())
+        return
+
+    # Проверка: уже отправлена заявка?
+    if user_id in pending_approvals:
+        await message.answer('<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Ваша заявка уже отправлена на рассмотрение администрации, ожидайте подтверждения.')
+        return
+
+    # Новая заявка
+    pending_approvals[user_id] = True
+
+    await message.answer('<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Ваша заявка отправлена на рассмотрение администрации, ожидайте подтверждения.')
+
+    # Админу уведомление
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f'<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Уведомление о новой заявке, пользователь @{message.from_user.username or "user"}, отправил запрос на подтверждение использования бота.',
+            reply_markup=admin_keyboard(user_id)
+        )
+    except:
+        pass
+
+@dp.callback_query(F.data.startswith("approve_"))
+async def approve_user(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+
+    approved_users.add(user_id)
+    pending_approvals.pop(user_id, None)
+
+    await callback.message.edit_text("Одобрено ✅")
+    await callback.answer()
+
+    try:
+        await bot.send_message(
+            user_id,
+            '<tg-emoji emoji-id="5278602437001767574">🔓</tg-emoji> Ваша заявка была успешно одобрена, для начала работы с ботом, пропишите /start'
+        )
+    except:
+        pass
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject_user(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+
+    pending_approvals.pop(user_id, None)
+
+    await callback.message.edit_text("Отклонено ❌")
+    await callback.answer()
+
+    try:
+        await bot.send_message(
+            user_id,
+            '<tg-emoji emoji-id="5278578973595427038">🚫</tg-emoji> Ваша заявка, к сожалению, отклонена. Свяжитесь с администратором для уточнения причины.'
+        )
+    except:
+        pass
 
 @dp.callback_query(F.data == "maxqr")
 async def maxqr_stub(callback: types.CallbackQuery):

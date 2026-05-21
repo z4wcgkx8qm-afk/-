@@ -51,7 +51,7 @@ async def cmd_start(message: types.Message):
             f'├ Актуальный прайс: <code>4.4$</code>\n'
             f'├ Общая очередь: <code>0</code>\n'
             f'├ Баланс: <code>0.00$</code>\n'
-            f'└ <tg-emoji emoji-id="5215670591905869044">🟢</tg-emoji> Статус бота: В работе</blockquote>'
+            f'└ Статус бота: <tg-emoji emoji-id="5215670591905869044">🟢</tg-emoji> В работе</blockquote>'
         )
         await message.answer(text, reply_markup=menu_keyboard())
         return
@@ -151,7 +151,7 @@ async def back_to_menu(callback: types.CallbackQuery):
         f'├ Актуальный прайс: <code>4.4$</code>\n'
         f'├ Общая очередь: <code>0</code>\n'
         f'├ Баланс: <code>0.00$</code>\n'
-        f'└ <tg-emoji emoji-id="5215670591905869044">🟢</tg-emoji> Статус бота: В работе</blockquote>'
+        f'└ Статус бота: <tg-emoji emoji-id="5215670591905869044">🟢</tg-emoji> В работе</blockquote>'
     )
     await callback.message.edit_text(text, reply_markup=menu_keyboard())
     await callback.answer()

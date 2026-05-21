@@ -12,7 +12,6 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Храним заявки: {user_id: True}  (в будущем БД)
 pending_approvals = {}
 approved_users = set()
 
@@ -34,7 +33,11 @@ def admin_keyboard(user_id: int):
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
 
-    # Проверка: уже одобрен?
+    # Админ — сразу доступ
+    if user_id == ADMIN_ID:
+        approved_users.add(user_id)
+
+    # Уже одобрен?
     if user_id in approved_users:
         text = (
             f'<tg-emoji emoji-id="5206202791768393003">🧭</tg-emoji> Добро пожаловать в сервис GOST!\n'
@@ -46,7 +49,7 @@ async def cmd_start(message: types.Message):
         await message.answer(text, reply_markup=menu_keyboard())
         return
 
-    # Проверка: уже отправлена заявка?
+    # Уже отправлена заявка?
     if user_id in pending_approvals:
         await message.answer('<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Ваша заявка уже отправлена на рассмотрение администрации, ожидайте подтверждения.')
         return
@@ -56,7 +59,6 @@ async def cmd_start(message: types.Message):
 
     await message.answer('<tg-emoji emoji-id="5206626000665868017">📚</tg-emoji> Ваша заявка отправлена на рассмотрение администрации, ожидайте подтверждения.')
 
-    # Админу уведомление
     try:
         await bot.send_message(
             ADMIN_ID,

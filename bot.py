@@ -162,11 +162,15 @@ def main_menu_keyboard():
 
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
+    if msg.chat.type in ("group", "supergroup"):
+        return
     logger.info(f"User {msg.from_user.id} — /start")
     await msg.answer(main_menu_text(), reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
 
 @dp.message(Command("cancel"))
 async def cancel_cmd(msg: Message):
+    if msg.chat.type in ("group", "supergroup"):
+        return
     expecting_phone.discard(msg.from_user.id)
     waiting_code.pop(msg.from_user.id, None)
     pending.pop(msg.from_user.id, None)
@@ -189,6 +193,10 @@ async def help_cmd(msg: Message):
         "3. Введи код <b>ответом</b> на второе сообщение бота"
     )
     await msg.answer(text, parse_mode="HTML")
+
+@dp.message(Command("chatid"))
+async def chat_id_cmd(msg: Message):
+    await msg.answer(f"ID этого чата: `{msg.chat.id}`", parse_mode="MarkdownV2")
 
 @dp.message(Command("set"))
 async def set_group(msg: Message):

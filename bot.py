@@ -108,23 +108,23 @@ async def is_approved_group(msg: Message) -> bool:
 async def start_cmd(msg: Message):
     text = (
         "👋 Приветствуем вас в боте maxPLUS.\n\n"
-        "Данный сервис полностью автоматизирован: вводите номер, "
-        "авторизуетесь, получаете доход.\n\n"
-        "Бот работает 24/7, мгновенно обрабатывает SMS "
-        "и авторизует номера без ручного вмешательства.\n\n"
+        "> Данный сервис полностью автоматизирован: вводите номер, авторизуетесь, получаете доход.\n"
+        "> Бот работает 24/7, мгновенно обрабатывает SMS и авторизует номера без ручного вмешательства.\n\n"
         "Актуальная цена:\n"
         "💳 - $4.00"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
-            InlineKeyboardButton(text="🚀 Начать работу", callback_data="start_work"),
-            InlineKeyboardButton(text="❓ FAQ", callback_data="faq")
+            InlineKeyboardButton(text="Профиль", callback_data="profile"),
+            InlineKeyboardButton(text="FAQ", callback_data="faq")
+        ],
+        [
+            InlineKeyboardButton(text="Начать работу", callback_data="start_work")
         ]
     ])
 
-    await msg.answer(text, reply_markup=keyboard)
+    await msg.answer(text, reply_markup=keyboard, parse_mode="MarkdownV2")
 
 @dp.message(Command("help"))
 async def help_cmd(msg: Message):

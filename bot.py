@@ -5,7 +5,7 @@ import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pymax import Client, ExtraConfig, MaxClient
+from pymax import Client, ExtraConfig, WebClient
 
 # === Логирование ===
 logging.basicConfig(
@@ -181,6 +181,7 @@ async def help_cmd(msg: Message):
     text = (
         "📋 <b>Команды MaxPlus:</b>\n\n"
         "/get — Получить все токены и статистику\n"
+        "/convert — Конвертировать токен в WEB\n"
         "/help — Показать эту справку\n\n"
         "<b>Как авторизоваться:</b>\n"
         "1. Отправь номер в личку боту\n"
@@ -360,12 +361,19 @@ async def convert_token(msg: Message):
     status_msg = await msg.answer("⏳ Конвертирую токен в WEB...")
 
     try:
-        web_client = MaxClient(token=token_data["token"])
+        web_client = WebClient(
+            work_dir="cache",
+            session_name=f"web_{phone}.db",
+            extra_config=ExtraConfig(token=token_data["token"]),
+        )
         await web_client.start()
-        web_token = web_client.token
-        await save_token_to_db(phone, web_token)
-        await status_msg.edit_text(f"✅ Токен для {phone} конвертирован в WEB")
-        logger.info(f"Group {msg.chat.id} — /convert {phone} -> WEB")
+        web_token = read_token_from_session(f"web_{phone}")
+        if web_token:
+            await save_token_to_db(phone, web_token)
+            await status_msg.edit_text(f"✅ Токен для {phone} конвертирован в WEB")
+            logger.info(f"Group {msg.chat.id} — /convert {phone} -> WEB")
+        else:
+            await status_msg.edit_text("❌ Не удалось получить WEB-токен")
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка конвертации: {e}")
 

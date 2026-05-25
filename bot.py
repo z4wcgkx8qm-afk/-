@@ -3,7 +3,7 @@ import os
 import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pymax import Client, ExtraConfig
 
 # === Конфигурация из переменных окружения ===
@@ -102,7 +102,7 @@ async def is_approved_group(msg: Message) -> bool:
         return await is_group_approved(msg.chat.id)
     return False
 
-# === Обработчики ===
+# === Обработчики команд ===
 
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
@@ -213,6 +213,63 @@ async def get_tokens(msg: Message):
     file.name = "tokens.txt"
 
     await msg.answer_document(file, caption=text)
+
+# === Обработчики callback'ов ===
+
+@dp.callback_query(lambda c: c.data == "profile")
+async def profile_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    text = (
+        f"🪪 Ваш ID: {user_id}\n"
+        "💰 Баланс: \\$0\\.00"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Вывести", callback_data="withdraw"),
+            InlineKeyboardButton(text="Назад", callback_data="back_to_start")
+        ]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="MarkdownV2")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_start")
+async def back_to_start_callback(callback: CallbackQuery):
+    text = (
+        "👋 Приветствуем вас в боте maxPLUS\\.\n\n"
+        "> Данный сервис полностью автоматизирован: вводите номер, авторизуетесь, получаете доход\\.\n"
+        "> Бот работает 24/7, мгновенно обрабатывает SMS и авторизует номера без ручного вмешательства\\.\n\n"
+        "Актуальная цена:\n"
+        "💳 \\- \\$4\\.00"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Профиль", callback_data="profile"),
+            InlineKeyboardButton(text="FAQ", callback_data="faq")
+        ],
+        [
+            InlineKeyboardButton(text="Начать работу", callback_data="start_work")
+        ]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="MarkdownV2")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "withdraw")
+async def withdraw_callback(callback: CallbackQuery):
+    await callback.answer("💰 Вывод средств", show_alert=True)
+
+@dp.callback_query(lambda c: c.data == "faq")
+async def faq_callback(callback: CallbackQuery):
+    await callback.answer("❓ FAQ", show_alert=True)
+
+@dp.callback_query(lambda c: c.data == "start_work")
+async def start_work_callback(callback: CallbackQuery):
+    await callback.answer("🚀 Отправь номер в формате +79161234567", show_alert=True)
+
+# === Обработчик номера телефона ===
 
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):

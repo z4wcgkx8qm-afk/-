@@ -269,9 +269,11 @@ async def get_tokens(msg: Message):
 async def profile_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
     balance = await get_user_balance(user_id)
+    dollars = int(balance)
+    cents = int((balance - dollars) * 100)
     text = (
         f"🪪 Ваш ID: {user_id}\n"
-        f"💰 Баланс: \\${balance:.2f}"
+        f"💰 Баланс: \\${dollars}\\.{cents:02d}"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

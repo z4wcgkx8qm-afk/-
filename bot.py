@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from pymax import Client
 
-BOT_TOKEN = "ТВОЙ_ТОКЕН_ОТ_BOTFATHER"
+BOT_TOKEN = "8983059538:AAF1XQEkuwmvYreLN2csBfYrRW8NBQ9pwuc"
 ADMIN_ID = 123456789
 
 bot = Bot(token=BOT_TOKEN)

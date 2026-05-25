@@ -8,7 +8,8 @@ BOT_TOKEN = "8983059538:AAF1XQEkuwmvYreLN2csBfYrRW8NBQ9pwuc"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-pending = {}
+pending = {}  # user_id -> {"provider": ..., "phone": ...}
+waiting_code = set()  # user_id тех, кто должен ввести код
 
 class TelegramSmsProvider:
     def __init__(self):
@@ -23,22 +24,18 @@ class TelegramSmsProvider:
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
     await msg.answer(
-        "👋 Добро пожаловать в <b>MaxPlus</b> — сервис авторизации аккаунтов MAX!\n\n"
-        "📱 <b>Как пользоваться:</b>\n"
-        "1. Отправь номер в формате +79161234567\n"
-        "2. Дождись SMS с кодом\n"
-        "3. Отправь код командой /code 12345\n\n"
-        "❓ <b>FAQ:</b>\n"
-        "• Номер не зарегистрирован? — Аккаунт будет создан автоматически\n"
-        "• Не приходит SMS? — Убедись, что номер не виртуальный\n"
-        "• Ошибка авторизации? — Проверь код или попробуй позже\n\n"
-        "Просто отправь номер и начнём!",
-        parse_mode="HTML"
+        "👋 MaxPlus — авторизация MAX\n\n"
+        "Отправь номер в формате +79161234567"
     )
 
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):
     phone = msg.text.strip()
+
+    # Если пользователь сейчас должен ввести код
+    if msg.from_user.id in waiting_code:
+        return await code_as_reply(msg)
+
     if not phone.startswith("+") or len(phone) != 12:
         return await msg.answer("❌ Формат: +79161234567")
 
@@ -56,16 +53,18 @@ async def phone_handler(msg: Message):
     await msg.answer(
         f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты."
     )
-    await msg.answer(
-        "📩 Отправьте полученный код командой /code. Например: /code 12345"
-    )
+    await asyncio.sleep(1.5)
+    waiting_code.add(msg.from_user.id)
+    second_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:
-        pending[msg.from_user.id] = sms_provider
+        pending[msg.from_user.id] = {"provider": sms_provider, "phone": phone}
         await client.start()
+        waiting_code.discard(msg.from_user.id)
         await msg.answer(f"✅ {phone} авторизован!\nСессия: cache/{phone}.db")
     except Exception as e:
+        waiting_code.discard(msg.from_user.id)
         error_text = str(e).lower()
         error_name = type(e).__name__.lower()
 
@@ -80,8 +79,25 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
     finally:
         pending.pop(msg.from_user.id, None)
 
+async def code_as_reply(msg: Message):
+    """Обрабатывает код, отправленный как обычное сообщение"""
+    if msg.from_user.id not in pending:
+        waiting_code.discard(msg.from_user.id)
+        return await msg.answer("❌ Сессия устарела. Отправь номер заново")
+
+    code = msg.text.strip()
+    if not code.isdigit():
+        return await msg.answer("❌ Код должен состоять только из цифр")
+
+    data = pending[msg.from_user.id]
+    provider = data["provider"]
+    waiting_code.discard(msg.from_user.id)
+    await provider.set_code(code)
+    await msg.answer("✅ Код принят, авторизую...")
+
 @dp.message(Command("code"))
 async def code_handler(msg: Message):
+    """Оставлен для совместимости, но основной ввод — ответом на второе сообщение"""
     if msg.from_user.id not in pending:
         return await msg.answer("❌ Сначала отправь номер")
 
@@ -89,7 +105,9 @@ async def code_handler(msg: Message):
     if not code or not code.isdigit():
         return await msg.answer("❌ Используй: /code 12345")
 
-    provider = pending[msg.from_user.id]
+    data = pending[msg.from_user.id]
+    provider = data["provider"]
+    waiting_code.discard(msg.from_user.id)
     await provider.set_code(code)
     await msg.answer("✅ Код принят, авторизую...")
 

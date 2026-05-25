@@ -277,7 +277,12 @@ async def phone_handler(msg: Message):
         return
 
     if msg.from_user.id in waiting_code:
-        return await code_as_reply(msg)
+        if msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
+            return await code_as_reply(msg)
+        else:
+            return await msg.answer(
+                "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
+            )
 
     if msg.from_user.id not in expecting_phone:
         return
@@ -351,7 +356,9 @@ async def code_as_reply(msg: Message):
     code = msg.text.strip()
 
     if not code.isdigit() or len(code) != 6:
-        return await msg.answer("❌ Код должен состоять из шести цифр. Введите код ответом на сообщение выше")
+        return await msg.answer(
+            "❌ Неверный формат кода. Код должен состоять ровно из 6 цифр, без букв и символов"
+        )
 
     data = pending[msg.from_user.id]
     provider = data["provider"]

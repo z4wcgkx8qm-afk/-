@@ -27,9 +27,14 @@ async def start_cmd(msg: Message):
         "Я запрошу SMS и авторизую аккаунт."
     )
 
-@dp.message(F.text, ~F.text.startswith("/"))
+@dp.message()
 async def phone_handler(msg: Message):
-    phone = msg.text.strip()
+    # Пропускаем команды
+    if msg.text and msg.text.startswith("/"):
+        return
+
+    phone = msg.text.strip() if msg.text else ""
+
     if not phone.startswith("+") or len(phone) != 12:
         return await msg.answer("❌ Формат: +79161234567")
 

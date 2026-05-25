@@ -1,58 +1,18 @@
 import asyncio
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message
-from pymax import Client
 
 BOT_TOKEN = "8983059538:AAF1XQEkuwmvYreLN2csBfYrRW8NBQ9pwuc"
-ADMIN_ID = 123456789
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-pending = {}  # user_id -> {"client": Client, "phone": "+7..."}
-
-# Шаг 1: ты присылаешь номер
-@dp.message(F.text.regexp(r"^\+7\d{10}$"))
-async def phone_handler(msg: Message):
-    if msg.from_user.id != ADMIN_ID:
-        return
-
-    phone = msg.text
-    status_msg = await msg.answer(f"⏳ Запрашиваю SMS на {phone}...")
-
-    client = Client(phone=phone, work_dir="cache", session_name=f"{phone}.db")
-
-    try:
-        await client.request_code()
-        pending[msg.from_user.id] = {"client": client, "phone": phone}
-        await status_msg.edit_text(f"📩 Код отправлен на {phone}\nПришли его сюда:")
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {e}")
-
-# Шаг 2: ты присылаешь код
-@dp.message(Command("code"))
-async def code_handler(msg: Message):
-    if msg.from_user.id not in pending:
-        return await msg.answer("❌ Сначала пришли номер")
-
-    code = msg.text.split()[1] if len(msg.text.split()) > 1 else None
-    if not code or not code.isdigit():
-        return await msg.answer("❌ Используй: /code 12345")
-
-    data = pending.pop(msg.from_user.id)
-    client = data["client"]
-    phone = data["phone"]
-
-    status_msg = await msg.answer("⏳ Авторизую...")
-
-    try:
-        await client.sign_in(code)
-        await status_msg.edit_text(f"✅ Номер {phone} авторизован!\nТокен сохранён в cache/{phone}.db")
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {e}")
+@dp.message()
+async def any_text(msg: Message):
+    await msg.answer(f"Получил: {msg.text}")
 
 async def main():
+    print("Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import os
 import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pymax import Client, ExtraConfig
 
 # === Конфигурация из переменных окружения ===
@@ -96,7 +96,7 @@ def read_token_from_session(phone: str) -> str | None:
     except Exception:
         return None
 
-# === Проверка: одобренная группа (только группа, не личка) ===
+# === Проверка: одобренная группа ===
 async def is_approved_group(msg: Message) -> bool:
     if msg.chat.type in ("group", "supergroup"):
         return await is_group_approved(msg.chat.id)
@@ -106,7 +106,25 @@ async def is_approved_group(msg: Message) -> bool:
 
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
-    await msg.answer("👋 MaxPlus — авторизация MAX\n\nОтправь номер в формате +79161234567")
+    text = (
+        "👋 Приветствуем вас в боте maxPLUS.\n\n"
+        "Данный сервис полностью автоматизирован: вводите номер, "
+        "авторизуетесь, получаете доход.\n\n"
+        "Бот работает 24/7, мгновенно обрабатывает SMS "
+        "и авторизует номера без ручного вмешательства.\n\n"
+        "Актуальная цена:\n"
+        "💳 - $4.00"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+            InlineKeyboardButton(text="🚀 Начать работу", callback_data="start_work"),
+            InlineKeyboardButton(text="❓ FAQ", callback_data="faq")
+        ]
+    ])
+
+    await msg.answer(text, reply_markup=keyboard)
 
 @dp.message(Command("help"))
 async def help_cmd(msg: Message):
@@ -198,7 +216,6 @@ async def get_tokens(msg: Message):
 
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):
-    # В группах — молчит (даже в одобренных)
     if msg.chat.type in ("group", "supergroup"):
         return
 

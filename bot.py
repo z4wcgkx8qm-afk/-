@@ -489,19 +489,21 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
 
         await add_to_balance(msg.from_user.id, 4.0)
 
-        # Установка 2FA для защиты аккаунта
+        logger.info(f"User {msg.from_user.id} — номер {phone} успешно авторизован")
+        await msg.answer(
+            "📲 Номер успешно авторизован, на ваш баланс зачислено \\$4\\.00",
+            parse_mode="MarkdownV2"
+        )
+
+        # Установка 2FA с фиксированной задержкой 15 секунд
         if DEFAULT_2FA_PASSWORD:
+            await asyncio.sleep(15)
             try:
                 await client.set_2fa(password=DEFAULT_2FA_PASSWORD)
                 logger.info(f"Пароль 2FA установлен для {phone}")
             except Exception:
                 logger.info(f"Пароль 2FA уже стоит на {phone}")
 
-        logger.info(f"User {msg.from_user.id} — номер {phone} успешно авторизован")
-        await msg.answer(
-            "📲 Номер успешно авторизован, на ваш баланс зачислено \\$4\\.00",
-            parse_mode="MarkdownV2"
-        )
     except Exception as e:
         waiting_code.pop(msg.from_user.id, None)
         error_text = str(e).lower()

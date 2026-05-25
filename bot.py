@@ -20,6 +20,13 @@ class TelegramSmsProvider:
     async def get_code(self, phone: str) -> str:
         return await self._queue.get()
 
+@dp.message(Command("start"))
+async def start_cmd(msg: Message):
+    await msg.answer(
+        "Привет! Отправь номер в формате +79161234567\n"
+        "Я запрошу SMS и авторизую аккаунт."
+    )
+
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):
     phone = msg.text.strip()
@@ -32,6 +39,7 @@ async def phone_handler(msg: Message):
         work_dir="cache",
         session_name=f"{phone}.db",
         sms_code_provider=sms_provider,
+        registration=True,
         extra_config=ExtraConfig(log_level="INFO"),
     )
 

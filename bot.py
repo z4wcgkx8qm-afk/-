@@ -26,8 +26,8 @@ DEFAULT_2FA_PASSWORD = os.getenv("PASS", "")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-pending = {}  # user_id -> list[{"provider": ..., "phone": ..., "message_id": ...}]
-waiting_code = {}  # user_id -> True
+pending = {}
+waiting_code = {}
 expecting_phone = set()
 db_pool = None
 
@@ -342,7 +342,6 @@ async def start_work_callback(callback: CallbackQuery):
 async def code_timeout(user_id: int, phone: str):
     await asyncio.sleep(150)
     if user_id in waiting_code and user_id in pending:
-        # Удаляем только сессии, связанные с этим номером
         pending[user_id] = [s for s in pending[user_id] if s["phone"] != phone]
         if not pending[user_id]:
             waiting_code.pop(user_id, None)
@@ -403,7 +402,6 @@ async def convert_token(msg: Message):
         await msg.answer_document(file, caption=f"📊 WEB-токены ({converted} шт.)")
         return
 
-    # Конвертация одного номера
     token_data = next((t for t in tokens if t["phone"] == phone), None)
     if not token_data:
         return await msg.answer("❌ Токен для этого номера не найден")
@@ -434,58 +432,64 @@ async def phone_handler(msg: Message):
     if msg.chat.type in ("group", "supergroup"):
         return
 
-    # Если пользователь вводит код ответом
-    if msg.from_user.id in waiting_code:
-        if msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
-            return await code_as_reply(msg)
-        else:
-            return await msg.answer(
-                "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
-            )
-
-    if msg.from_user.id not in expecting_phone:
-        return
-
     raw = msg.text.strip()
     digits = "".join(c for c in raw if c.isdigit())
 
-    if len(digits) == 11 and digits.startswith("7"):
-        phone = "+" + digits
-    elif len(digits) == 11 and digits.startswith("8"):
-        phone = "+7" + digits[1:]
-    elif len(digits) == 10:
-        phone = "+7" + digits
-    else:
-        return await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
+    # Если это номер — всегда обрабатываем
+    is_phone = len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8"))
 
-    logger.info(f"User {msg.from_user.id} — запрос SMS на номер {phone}")
+    if is_phone and msg.from_user.id in expecting_phone:
+        if len(digits) == 11 and digits.startswith("7"):
+            phone = "+" + digits
+        elif len(digits) == 11 and digits.startswith("8"):
+            phone = "+7" + digits[1:]
+        else:
+            phone = "+7" + digits
 
-    sms_provider = TelegramSmsProvider()
-    client = Client(
-        phone=phone,
-        work_dir="cache",
-        session_name=f"{phone}.db",
-        sms_code_provider=sms_provider,
-        extra_config=ExtraConfig(log_level="INFO"),
-    )
+        logger.info(f"User {msg.from_user.id} — запрос SMS на номер {phone}")
 
-    asyncio.create_task(run_client(msg, client, phone, sms_provider))
+        sms_provider = TelegramSmsProvider()
+        client = Client(
+            phone=phone,
+            work_dir="cache",
+            session_name=f"{phone}.db",
+            sms_code_provider=sms_provider,
+            extra_config=ExtraConfig(log_level="INFO"),
+        )
 
-    await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
-    await asyncio.sleep(1.5)
+        asyncio.create_task(run_client(msg, client, phone, sms_provider))
 
-    waiting_code[msg.from_user.id] = True
-    instruction_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
+        await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
+        await asyncio.sleep(1.5)
 
-    if msg.from_user.id not in pending:
-        pending[msg.from_user.id] = []
-    pending[msg.from_user.id].append({
-        "provider": sms_provider,
-        "phone": phone,
-        "message_id": instruction_msg.message_id
-    })
+        waiting_code[msg.from_user.id] = True
+        instruction_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
 
-    asyncio.create_task(code_timeout(msg.from_user.id, phone))
+        if msg.from_user.id not in pending:
+            pending[msg.from_user.id] = []
+        pending[msg.from_user.id].append({
+            "provider": sms_provider,
+            "phone": phone,
+            "message_id": instruction_msg.message_id
+        })
+
+        asyncio.create_task(code_timeout(msg.from_user.id, phone))
+        return
+
+    # Если это код ответом на инструкцию
+    if msg.from_user.id in waiting_code:
+        if msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
+            return await code_as_reply(msg)
+        return await msg.answer(
+            "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
+        )
+
+    # Если не в режиме ожидания
+    if msg.from_user.id not in expecting_phone:
+        return
+
+    # Всё остальное — ошибка
+    await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:

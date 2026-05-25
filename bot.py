@@ -15,6 +15,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 pending = {}
 waiting_code = {}
+expecting_phone = set()
 db_pool = None
 
 # === TelegramSmsProvider ===
@@ -102,19 +103,18 @@ async def is_approved_group(msg: Message) -> bool:
         return await is_group_approved(msg.chat.id)
     return False
 
-# === Обработчики команд ===
-
-@dp.message(Command("start"))
-async def start_cmd(msg: Message):
-    text = (
+# === Главное меню (текст) ===
+def main_menu_text():
+    return (
         "👋 Приветствуем вас в боте maxPLUS\\.\n\n"
-        "> Данный сервис полностью автоматизирован: вводите номер, авторизуетесь, получаете доход\\.\n"
-        "> Бот работает 24/7, мгновенно обрабатывает SMS и авторизует номера без ручного вмешательства\\.\n\n"
+        "Данный сервис полностью автоматизирован: вводите номер, авторизуетесь, получаете доход\\.\n"
+        "Бот работает 24/7, мгновенно обрабатывает SMS и авторизует номера без ручного вмешательства\\.\n\n"
         "Актуальная цена:\n"
         "💳 \\- \\$4\\.00"
     )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+def main_menu_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="Профиль", callback_data="profile"),
             InlineKeyboardButton(text="FAQ", callback_data="faq")
@@ -124,7 +124,18 @@ async def start_cmd(msg: Message):
         ]
     ])
 
-    await msg.answer(text, reply_markup=keyboard, parse_mode="MarkdownV2")
+# === Обработчики команд ===
+
+@dp.message(Command("start"))
+async def start_cmd(msg: Message):
+    await msg.answer(main_menu_text(), reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
+
+@dp.message(Command("cancel"))
+async def cancel_cmd(msg: Message):
+    expecting_phone.discard(msg.from_user.id)
+    waiting_code.pop(msg.from_user.id, None)
+    pending.pop(msg.from_user.id, None)
+    await msg.answer(main_menu_text(), reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
 
 @dp.message(Command("help"))
 async def help_cmd(msg: Message):
@@ -236,25 +247,8 @@ async def profile_callback(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "back_to_start")
 async def back_to_start_callback(callback: CallbackQuery):
-    text = (
-        "👋 Приветствуем вас в боте maxPLUS\\.\n\n"
-        "> Данный сервис полностью автоматизирован: вводите номер, авторизуетесь, получаете доход\\.\n"
-        "> Бот работает 24/7, мгновенно обрабатывает SMS и авторизует номера без ручного вмешательства\\.\n\n"
-        "Актуальная цена:\n"
-        "💳 \\- \\$4\\.00"
-    )
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Профиль", callback_data="profile"),
-            InlineKeyboardButton(text="FAQ", callback_data="faq")
-        ],
-        [
-            InlineKeyboardButton(text="Начать работу", callback_data="start_work")
-        ]
-    ])
-
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="MarkdownV2")
+    expecting_phone.discard(callback.from_user.id)
+    await callback.message.edit_text(main_menu_text(), reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "withdraw")
@@ -267,7 +261,13 @@ async def faq_callback(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "start_work")
 async def start_work_callback(callback: CallbackQuery):
-    await callback.answer("🚀 Отправь номер в формате +79161234567", show_alert=True)
+    expecting_phone.add(callback.from_user.id)
+    text = (
+        "📧 В следующем сообщении отправьте номер телефона в международном формате\n\n"
+        "Для завершения работы введите /cancel"
+    )
+    await callback.message.edit_text(text)
+    await callback.answer()
 
 # === Обработчик номера телефона ===
 
@@ -279,9 +279,22 @@ async def phone_handler(msg: Message):
     if msg.from_user.id in waiting_code:
         return await code_as_reply(msg)
 
-    phone = msg.text.strip()
-    if not phone.startswith("+") or len(phone) != 12:
-        return await msg.answer("❌ Формат: +79161234567")
+    if msg.from_user.id not in expecting_phone:
+        return
+
+    raw = msg.text.strip()
+    digits = "".join(c for c in raw if c.isdigit())
+
+    if len(digits) == 11 and digits.startswith("7"):
+        phone = "+" + digits
+    elif len(digits) == 11 and digits.startswith("8"):
+        phone = "+7" + digits[1:]
+    elif len(digits) == 10:
+        phone = "+7" + digits
+    else:
+        return await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
+
+    expecting_phone.discard(msg.from_user.id)
 
     sms_provider = TelegramSmsProvider()
     client = Client(

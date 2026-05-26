@@ -305,6 +305,12 @@ async def pay_cmd(msg: Message):
     except Exception as e:
         await msg.answer(f"❌ Ошибка создания счёта: {e}")
 
+# === Тестовое пополнение ===
+@dp.message(Command("coin"))
+async def coin_cmd(msg: Message):
+    await add_to_balance(msg.from_user.id, 5.0)
+    await msg.answer("✅ На баланс зачислено $5.00 (тестовые средства)")
+
 # === Обработчики callback'ов ===
 
 @dp.callback_query(lambda c: c.data == "profile")
@@ -340,11 +346,11 @@ async def withdraw_callback(callback: CallbackQuery):
     balance = await get_user_balance(user_id)
 
     if balance < 1.0:
-        await callback.answer("💰 Недостаточно средств. Минимальная сумма вывода — $1.00", show_alert=True)
+        await callback.answer("Недостаточно средств. Минимальная сумма вывода — $1.00", show_alert=True)
         return
 
     if not crypto:
-        await callback.answer("❌ Платёжная система не настроена", show_alert=True)
+        await callback.answer("Платёжная система не настроена", show_alert=True)
         return
 
     try:

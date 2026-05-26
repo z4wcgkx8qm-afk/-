@@ -65,10 +65,15 @@ async def init_db():
                 phone TEXT PRIMARY KEY,
                 token TEXT NOT NULL,
                 alive BOOLEAN DEFAULT TRUE,
-                exported BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
+        # Миграция: добавляем exported
+        try:
+            await conn.execute("ALTER TABLE tokens ADD COLUMN exported BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -577,11 +582,9 @@ async def main_handler(msg: Message):
         else:
             phone = "+7" + digits
 
-        # Проверка блокировки номера
         if phone in blacklisted_numbers:
             return await msg.answer("❌ Слишком много попыток авторизации для этого номера")
 
-        # Проверка на уже авторизованный номер
         existing = await get_token_by_phone(phone)
         if existing and existing["alive"]:
             return await msg.answer("📲 Этот номер уже был авторизован ранее, повторная авторизация не требуется")
@@ -627,7 +630,6 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         if token:
             await save_token_to_db(phone, token)
 
-        # Защита от двойных начислений
         existing = await get_token_by_phone(phone)
         if existing and existing["alive"]:
             await msg.answer("📲 Этот номер уже был авторизован ранее, повторное начисление не выполнено")
@@ -641,7 +643,6 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             parse_mode="MarkdownV2"
         )
 
-        # Уведомление в одобренную группу
         if APPROVED_GROUP_ID:
             try:
                 profile = client.me

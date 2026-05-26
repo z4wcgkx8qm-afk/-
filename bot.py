@@ -68,7 +68,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
-        # Миграция: добавляем exported
         try:
             await conn.execute("ALTER TABLE tokens ADD COLUMN exported BOOLEAN DEFAULT FALSE")
         except Exception:
@@ -611,8 +610,6 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         await msg.answer(f"📤 SMS-код отправлен на номер {phone}. Ожидайте сообщение в течение минуты.")
         await asyncio.sleep(1.5)
 
-        await client.start()
-
         waiting_code[msg.from_user.id] = True
         instruction_msg = await msg.answer("📩 Введите код из SMS ответом на это сообщение:")
 
@@ -625,6 +622,8 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         })
 
         asyncio.create_task(code_timeout(msg.from_user.id, phone))
+
+        await client.start()
 
         token = read_token_from_session(phone)
         if token:

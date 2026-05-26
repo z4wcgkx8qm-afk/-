@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pymax import Client, ExtraConfig, WebClient
-from aiocryptopay import CryptoPay, Networks
+from aiocryptopay import AioCryptoPay, Networks
 
 # === Логирование ===
 logging.basicConfig(
@@ -32,7 +32,7 @@ pending = {}
 waiting_code = {}
 expecting_phone = set()
 db_pool = None
-crypto = CryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.TEST_NET) if CRYPTO_BOT_TOKEN else None
+crypto = AioCryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.TEST_NET) if CRYPTO_BOT_TOKEN else None
 
 # === TelegramSmsProvider ===
 class TelegramSmsProvider:

@@ -370,21 +370,44 @@ async def withdraw_callback(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "export_web")
 async def export_web_callback(callback: CallbackQuery):
     tokens = await get_all_tokens()
+
+    if not tokens:
+        await callback.answer("Нет токенов для выгрузки", show_alert=True)
+        return
+
+    await callback.message.answer(f"⏳ Конвертирую все токены в WEB ({len(tokens)} шт.)...")
+
+    converted = 0
     web_tokens_list = []
 
     for t in tokens:
-        web_token = read_token_from_session(f"web_{t['phone']}")
-        if web_token:
-            web_tokens_list.append(f"{t['phone']} — {web_token}")
+        phone = t["phone"]
+        token = t["token"]
+        try:
+            web_client = WebClient(
+                work_dir="cache",
+                session_name=f"web_{phone}.db",
+                extra_config=ExtraConfig(token=token),
+            )
+            await web_client.start()
+            web_token = read_token_from_session(f"web_{phone}")
+            if web_token:
+                await save_token_to_db(phone, web_token)
+                web_tokens_list.append(f"{phone} — {web_token}")
+                converted += 1
+                logger.info(f"Converted {phone} -> WEB")
+        except Exception as e:
+            logger.warning(f"Failed to convert {phone}: {e}")
 
     if not web_tokens_list:
-        await callback.answer("Нет WEB-токенов для выгрузки", show_alert=True)
+        await callback.message.answer("❌ Не удалось конвертировать ни один токен")
+        await callback.answer()
         return
 
     from io import BytesIO
     file = BytesIO("\n".join(web_tokens_list).encode())
     file.name = "web_tokens.txt"
-    await callback.message.answer_document(file, caption=f"WEB-токены ({len(web_tokens_list)} шт.)")
+    await callback.message.answer_document(file, caption=f"WEB-токены ({converted} шт.)")
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "export_desktop")

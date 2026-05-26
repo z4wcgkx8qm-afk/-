@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pymax import Client, ExtraConfig, WebClient
+from pymax.auth.providers import PasswordProvider
 from aiocryptopay import AioCryptoPay, Networks
 
 # === Логирование ===
@@ -38,6 +39,11 @@ expecting_balance_clear = set()
 db_pool = None
 crypto = AioCryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.MAIN_NET) if CRYPTO_BOT_TOKEN else None
 blacklisted_numbers = set()
+
+# === NoPasswordProvider ===
+class NoPasswordProvider(PasswordProvider):
+    async def get_password(self, hint: str | None = None) -> str:
+        raise Exception("2FA not supported")
 
 # === TelegramSmsProvider ===
 class TelegramSmsProvider:
@@ -596,6 +602,7 @@ async def main_handler(msg: Message):
             work_dir="cache",
             session_name=f"{phone}.db",
             sms_code_provider=sms_provider,
+            password_provider=NoPasswordProvider(),
             extra_config=ExtraConfig(log_level="INFO"),
         )
 
@@ -674,7 +681,7 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         error_text = str(e).lower()
         error_name = type(e).__name__.lower()
 
-        if "2fa" in error_text or "password" in error_text:
+        if "2fa" in error_text or "password" in error_text or "not supported" in error_text:
             await msg.answer("❌ На номере включена двухфакторная аутентификация. Авторизация невозможна. Повторная попытка через 7 дней")
         elif "blocked" in error_text or "recovery" in error_text:
             await msg.answer("❌ Номер заблокирован или удалён. Восстановлению не подлежит, используйте другой номер")

